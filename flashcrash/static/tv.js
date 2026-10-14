@@ -48,7 +48,8 @@
     newsMarkers = [];
     candles.setMarkers([]);
     $("feed").innerHTML = "";
-    d.feed.forEach(addFeed);
+    queue = [];
+    d.feed.filter(function (f) { return f.action !== "hold"; }).slice(-8).forEach(addFeed);
     if (d.news.length) $("headline").textContent = d.news[d.news.length - 1].text;
     if (d.current) pushCandle(d.current);
   }
@@ -57,8 +58,32 @@
   var LABEL = { buy: "BUY", sell: "SELL", hold: "HOLD" };
   function esc(s) { var d = document.createElement("div"); d.textContent = s == null ? "" : s; return d.innerHTML; }
 
+  // Hundreds of agents post every second; the TV shows a readable trickle instead.
+  // Posts queue up and one is shown every FEED_MS, human players and big trades first.
+  var FEED_MS = 1600, QUEUE_MAX = 40;
+  var queue = [];
+  function interest(f) {
+    if (f.human) return 1e9;
+    if (f.action === "hold") return 0;
+    return Math.sqrt(f.filled || f.qty * 0.2) + Math.random() * 6; // variety beats always showing whales
+  }
+  function queueFeed(f) {
+    if (!f.thought && !f.human) return;
+    queue.push(f);
+    if (queue.length > QUEUE_MAX) {
+      queue.sort(function (a, b) { return interest(b) - interest(a) || b.ts - a.ts; });
+      queue.length = QUEUE_MAX;
+    }
+  }
+  setInterval(function () {
+    if (!queue.length) return;
+    var best = 0;
+    for (var i = 1; i < queue.length; i++) if (interest(queue[i]) > interest(queue[best])) best = i;
+    addFeed(queue.splice(best, 1)[0]);
+    queue = queue.filter(function (f) { return f.human || Date.now() / 1000 - f.ts < 12; }); // stale posts are dropped
+  }, FEED_MS);
+
   function addFeed(f) {
-    if (f.action === "hold" && Math.random() < 0.6 && !f.human) return; // keep the feed lively, not noisy
     var li = document.createElement("li");
     if (f.human) li.className = "human";
     var cls = f.action === "buy" ? "up" : f.action === "sell" ? "down" : "";
@@ -157,7 +182,7 @@
       if (m.type === "init" || m.type === "reset") { loadHistory(m.data); snapshot(m.data); }
       else if (m.type === "snapshot") snapshot(m.data);
       else if (m.type === "candle") pushCandle(m.candle);
-      else if (m.type === "feed") addFeed(m.item);
+      else if (m.type === "feed") queueFeed(m.item);
       else if (m.type === "news") showNews(m.item, true);
     };
     ws.onclose = function () { setTimeout(connect, 1500); };
