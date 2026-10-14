@@ -42,6 +42,19 @@
   h1 { display: flex; align-items: center; }
   .help { margin-left: auto; width: 40px; height: 40px; padding: 0; border-radius: 50%; background: #1c2330; color: var(--text); font-size: 18px; }
 
+  /* live market */
+  #chart { height: 210px; margin: 0 -6px; }
+  .news { margin-top: 10px; font-size: 15px; line-height: 1.35; color: var(--text); }
+  .news b { color: #000; background: var(--accent); font-size: 11px; padding: 2px 6px; border-radius: 4px; margin-right: 6px; letter-spacing: 1px; }
+  .news.flash { animation: flash 1.2s ease-out; }
+  @keyframes flash { 0% { background: rgba(255,210,63,.35); } 100% { background: transparent; } }
+  #feed { list-style: none; margin: 0; padding: 0; }
+  #feed li { padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 15px; line-height: 1.35; animation: tin .3s ease-out; }
+  #feed li:last-child { border-bottom: 0; }
+  #feed .who { color: var(--dim); font-size: 13px; }
+  #feed .act { font-weight: 800; font-size: 13px; margin-left: 6px; }
+  #feed li.human { background: #22200c; margin: 0 -8px; padding: 9px 8px; border-radius: 8px; }
+
   /* tutorial */
   #tut { position: fixed; inset: 0; background: var(--bg); z-index: 20; display: flex; flex-direction: column; padding: 20px 16px 28px; }
   #tut .top { display: flex; justify-content: space-between; align-items: center; max-width: 480px; width: 100%; margin: 0 auto; }
@@ -83,9 +96,19 @@
     </div>
 
     <div class="card">
+      <div id="chart"></div>
+      <div class="news" id="news"><b>NEWS</b><span id="news-text">Waiting for breaking news…</span></div>
+    </div>
+
+    <div class="card">
       <p class="label">Trade</p>
       <div class="row"><button class="buy" data-side="buy" data-qty="10">BUY 10</button><button class="sell" data-side="sell" data-qty="10">SELL 10</button></div>
       <div class="row" style="margin-top:10px"><button class="buy" data-side="buy" data-qty="all">BUY ALL IN</button><button class="sell" data-side="sell" data-qty="all">DUMP ALL</button></div>
+    </div>
+
+    <div class="card">
+      <p class="label">🤖 What the AIs are saying</p>
+      <ul id="feed"></ul>
     </div>
 
     <div class="card">
@@ -127,6 +150,7 @@
     <p>Finish with the <b>highest profit %</b>. Watch "Who's winning" on the TV. Your rank is on your phone.</p>
     <p style="margin-top:12px">Tap <b>?</b> any time to see this again.</p></div>
 </template>
+<script src="/static/vendor/lightweight-charts.js"></script>
 <script>
 (function () {
   var $ = function (id) { return document.getElementById(id); };
@@ -149,6 +173,7 @@
   function start() {
     $("join-card").classList.add("hidden");
     $("game").classList.remove("hidden");
+    if (!chart) makeChart();
     refresh();
     setInterval(refresh, 1500);
     connect();
@@ -159,17 +184,84 @@
       return r.json().then(render);
     }).catch(function () {});
   }
+  // --- live chart + AI chatter (same WebSocket stream the TV uses) ---
+  var chart = null, candles = null, lastCandle = 0;
+  var TZ = -new Date().getTimezoneOffset() * 60; // chart library renders UTC
+  function local(c) { return { time: c.time + TZ, open: c.open, high: c.high, low: c.low, close: c.close }; }
+  function makeChart() {
+    var el = $("chart");
+    chart = LightweightCharts.createChart(el, {
+      width: el.clientWidth, height: el.clientHeight,
+      layout: { background: { color: "#121722" }, textColor: "#7d8899", fontSize: 11 },
+      grid: { vertLines: { visible: false }, horzLines: { color: "#1a212d" } },
+      timeScale: { timeVisible: true, secondsVisible: false, borderVisible: false, rightOffset: 2, barSpacing: 6 },
+      rightPriceScale: { borderVisible: false },
+      handleScroll: false, handleScale: false, crosshair: { mode: 2 },
+    });
+    candles = chart.addCandlestickSeries({ upColor: "#22d37e", downColor: "#ff4d5e", wickUpColor: "#22d37e", wickDownColor: "#ff4d5e", borderVisible: false });
+    window.addEventListener("resize", function () { chart.applyOptions({ width: el.clientWidth }); });
+  }
+  function pushCandle(c) {
+    c = local(c);
+    if (c.time < lastCandle) return;
+    lastCandle = c.time;
+    candles.update(c);
+  }
+  function esc(t) { var d = document.createElement("div"); d.textContent = t == null ? "" : t; return d.innerHTML; }
+  function showNews(n, fresh) {
+    $("news-text").textContent = n.text;
+    if (!fresh) return;
+    var el = $("news"); el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
+  }
+  // agents post many times a second; show a readable trickle, players and big trades first
+  var queue = [];
+  function interest(f) { return f.human ? 1e9 : Math.sqrt(f.filled || f.qty * 0.2) + Math.random() * 6; }
+  function addFeed(f) {
+    var li = document.createElement("li");
+    if (f.human) li.className = "human";
+    var cls = f.action === "buy" ? "up" : "down";
+    li.innerHTML = '<span class="who">' + esc(f.emoji) + " @" + esc(f.handle) + '</span><span class="act ' + cls + '">' +
+      f.action.toUpperCase() + " " + f.qty + "</span><br>" + esc(f.thought);
+    var feed = $("feed");
+    feed.insertBefore(li, feed.firstChild);
+    while (feed.children.length > 6) feed.removeChild(feed.lastChild);
+  }
+  setInterval(function () {
+    if (!queue.length) return;
+    var best = 0;
+    for (var i = 1; i < queue.length; i++) if (interest(queue[i]) > interest(queue[best])) best = i;
+    addFeed(queue.splice(best, 1)[0]);
+    queue = queue.filter(function (f) { return f.human || Date.now() / 1000 - f.ts < 12; });
+  }, 2000);
+  function loadHistory(d) {
+    candles.setData(d.candles.map(local));
+    lastCandle = 0;
+    if (d.candles.length) lastCandle = d.candles[d.candles.length - 1].time + TZ;
+    if (d.current) pushCandle(d.current);
+    $("feed").innerHTML = ""; queue = [];
+    d.feed.filter(function (f) { return f.action !== "hold" && f.qty > 0 && f.thought; }).slice(-4).forEach(addFeed);
+    if (d.news.length) showNews(d.news[d.news.length - 1], false);
+  }
+  function snapshot(s) {
+    var el = $("price");
+    el.textContent = s.price.toFixed(2);
+    if (lastPrice !== null && s.price !== lastPrice) el.className = s.price > lastPrice ? "up" : "down";
+    lastPrice = s.price;
+    $("chg").textContent = (s.change_pct >= 0 ? "+" : "") + s.change_pct.toFixed(2) + "%";
+    $("chg").className = s.change_pct >= 0 ? "up" : "down";
+  }
   function connect() {
     var ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
     ws.onmessage = function (ev) {
       var m = JSON.parse(ev.data);
-      if (m.type !== "snapshot" && m.type !== "init" && m.type !== "reset") return;
-      var s = m.data, el = $("price");
-      el.textContent = s.price.toFixed(2);
-      if (lastPrice !== null && s.price !== lastPrice) el.className = s.price > lastPrice ? "up" : "down";
-      lastPrice = s.price;
-      $("chg").textContent = (s.change_pct >= 0 ? "+" : "") + s.change_pct.toFixed(2) + "%";
-      $("chg").className = s.change_pct >= 0 ? "up" : "down";
+      if (m.type === "init" || m.type === "reset") { loadHistory(m.data); snapshot(m.data); }
+      else if (m.type === "snapshot") snapshot(m.data);
+      else if (m.type === "candle") pushCandle(m.candle);
+      else if (m.type === "news") showNews(m.item, true);
+      else if (m.type === "feed" && m.item.action !== "hold" && m.item.qty > 0 && (m.item.thought || m.item.human)) {
+        queue.push(m.item);
+        if (queue.length > 40) { queue.sort(function (a, b) { return interest(b) - interest(a); }); queue.length = 40; }
+      }
     };
     ws.onclose = function () { setTimeout(connect, 1500); };
   }
