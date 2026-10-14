@@ -169,6 +169,7 @@
     $("pnl").textContent = (p.pnl_pct >= 0 ? "+" : "") + p.pnl_pct.toFixed(1) + "%";
     $("pnl").className = p.pnl_pct >= 0 ? "up" : "down";
     $("rank").textContent = "#" + p.rank;
+    showMine(p);
   }
   function start() {
     $("join-card").classList.add("hidden");
@@ -206,6 +207,26 @@
     if (c.time < lastCandle) return;
     lastCandle = c.time;
     candles.update(c);
+  }
+  // your own trades: ▲ where you bought, ▼ where you sold, dashed line at your average cost
+  var costLine = null, markKey = "";
+  function showMine(p) {
+    if (!candles || !p.trades) return;
+    var key = p.trades.length + ":" + lastCandle;
+    if (key !== markKey) {
+      markKey = key;
+      candles.setMarkers(p.trades.map(function (t, i) {
+        var buy = t.side === "buy", latest = i === p.trades.length - 1; // price only on the latest, so labels don't pile up
+        return { time: t.time + TZ, position: buy ? "belowBar" : "aboveBar", color: buy ? "#22d37e" : "#ff4d5e",
+                 shape: buy ? "arrowUp" : "arrowDown", text: (buy ? "B" : "S") + t.qty + (latest ? " @ " + t.price.toFixed(2) : "") };
+      }));
+    }
+    if (p.avg_cost == null) {
+      if (costLine) { candles.removePriceLine(costLine); costLine = null; }
+      return;
+    }
+    var opts = { price: p.avg_cost, color: "#ffd23f", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "your avg" };
+    if (costLine) costLine.applyOptions(opts); else costLine = candles.createPriceLine(opts);
   }
   function esc(t) { var d = document.createElement("div"); d.textContent = t == null ? "" : t; return d.innerHTML; }
   function showNews(n, fresh) {

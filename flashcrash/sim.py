@@ -64,6 +64,7 @@ class FeedItem:
     ts: float
     filled: int = 0
     human: bool = False
+    fill_price: float | None = None  # average price actually paid/received
 
 
 @dataclass
@@ -79,6 +80,8 @@ class World:
     anchor: float = INITIAL_PRICE  # news-driven fundamental value (used by mock brains)
     volume: int = 0
     started: float = field(default_factory=time.time)
+    fills: dict[str, list[dict]] = field(default_factory=dict)  # player id -> their trades, for chart markers
+    cost: dict[str, float] = field(default_factory=dict)  # player id -> cost basis of shares held
 
 
 class Simulation:
@@ -116,10 +119,16 @@ class Simulation:
         for p in players:  # players keep their seat but get a fresh bankroll
             p.memory.clear()
             self.world.agents[p.id] = p
-            self.world.exchange.open_account(p.id, *self._human_bankroll())
+            self._seat(p.id)
 
     def _human_bankroll(self) -> tuple[int, int]:
         return 10_000, 50
+
+    def _seat(self, pid: str) -> None:
+        cash, shares = self._human_bankroll()
+        self.world.exchange.open_account(pid, cash, shares)
+        self.world.fills[pid] = []
+        self.world.cost[pid] = shares * INITIAL_PRICE  # starting shares count as bought at the open
 
     def start(self) -> None:
         loop = asyncio.get_running_loop()
@@ -240,18 +249,22 @@ class Simulation:
     async def apply(self, agent: Agent, d: Decision) -> FeedItem:
         ex = self.world.exchange
         price = ex.last_price
-        filled = 0
+        filled, fill_price = 0, None
         if d.action in ("buy", "sell") and d.qty > 0:
             limit = d.price
             if limit is not None:  # keep fat-fingered limits within ±20%
                 limit = min(max(limit, price * 0.8), price * 1.2)
             ex.cancel_agent(agent.id)
-            filled = sum(t.qty for t in ex.place(agent.id, d.action, d.qty, limit))
+            trades = ex.place(agent.id, d.action, d.qty, limit)
+            filled = sum(t.qty for t in trades)
+            if filled:
+                fill_price = round(sum(t.price * t.qty for t in trades) / filled, 2)
         if d.thought:
             agent.memory.append(d.thought)
             del agent.memory[:-4]
         item = FeedItem(next(self._ids), agent.name, agent.handle, agent.archetype.key, agent.archetype.emoji,
-                        d.action, d.qty, d.price, d.thought, d.model, time.time(), filled, agent.human)
+                        d.action, d.qty, d.price, d.thought, d.model, time.time(), filled, agent.human,
+                        fill_price)
         self.world.feed.append(item)
         await self._emit({"type": "feed", "item": item.__dict__})
         return item
@@ -278,7 +291,7 @@ class Simulation:
         pid = f"p{next(self._ids)}"
         agent = Agent(pid, name, name.lower().replace(" ", "_"), HUMAN, INITIAL_PRICE, 1.0, human=True)
         self.world.agents[pid] = agent
-        self.world.exchange.open_account(pid, *self._human_bankroll())
+        self._seat(pid)
         return agent
 
     def player(self, pid: str) -> Agent | None:
@@ -292,14 +305,27 @@ class Simulation:
         acct = self.world.exchange.accounts[pid]
         if qty == "all":
             qty = int(acct.free_cash // (self.price * 1.02)) if side == "buy" else acct.free_shares
+        held = acct.shares
         d = Decision(side, int(qty), None, f"{'Bought' if side == 'buy' else 'Sold'} {qty} by hand", "human")
-        return await self.apply(agent, d)
+        item = await self.apply(agent, d)
+        if item.filled:
+            w = self.world
+            if side == "buy":
+                w.cost[pid] = w.cost.get(pid, 0.0) + item.filled * item.fill_price
+            elif held:  # selling keeps the average cost of what's left
+                w.cost[pid] = w.cost.get(pid, 0.0) * (held - item.filled) / held
+            w.fills.setdefault(pid, []).append({"time": w.current.time, "side": side, "qty": item.filled,
+                                                "price": item.fill_price})
+            del w.fills[pid][:-50]
+        return item
 
     def portfolio(self, pid: str) -> dict:
         acct = self.world.exchange.accounts[pid]
         eq = acct.equity(self.price)
         return {"cash": round(acct.cash, 2), "shares": acct.shares, "equity": round(eq, 2),
-                "pnl_pct": round((eq / acct.start_equity - 1) * 100, 2), "rank": self._rank(pid)}
+                "pnl_pct": round((eq / acct.start_equity - 1) * 100, 2), "rank": self._rank(pid),
+                "avg_cost": round(self.world.cost.get(pid, 0.0) / acct.shares, 2) if acct.shares else None,
+                "trades": self.world.fills.get(pid, [])}
 
     def _rank(self, pid: str) -> int:
         p = self.price
