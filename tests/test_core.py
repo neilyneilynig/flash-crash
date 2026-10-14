@@ -1,11 +1,12 @@
 import asyncio
 import random
+import time
 
 import pytest
 
 from flashcrash.brain import MockBrain, parse_decision
-from flashcrash.market import Exchange
-from flashcrash.sim import Simulation
+from flashcrash.market import Exchange, Wallet
+from flashcrash.sim import Simulation, route_news
 
 
 def make_ex():
@@ -77,13 +78,52 @@ def test_parse_decision_rejects_prose():
         parse_decision("I think I will buy some")
 
 
+def test_wallet_is_shared_across_exchanges():
+    gpu, meme = Exchange(100.0), Exchange(8.0)
+    w = Wallet(1_000)
+    for ex in (gpu, meme):
+        ex.open_account("me", 0, 0, w)
+        ex.open_account("mm", 1_000_000, 10_000)
+    gpu.place("mm", "sell", 100, 100)
+    meme.place("mm", "sell", 1000, 8)
+    gpu.place("me", "buy", 8, None)  # $800 of GPU
+    meme.place("me", "buy", 1000, None)  # only $200 left -> 25 MEME
+    assert gpu.accounts["me"].shares == 8 and meme.accounts["me"].shares == 25
+    assert w.cash == pytest.approx(0)
+
+
+@pytest.mark.parametrize("text,focus,expected", [
+    ("GPU CEO arrested at the airport", None, ["GPU"]),
+    ("Doge Burger adds golden fries", "GPU", ["MEME"]),
+    ("Robotaxi crashes into a lake", None, ["ROBO"]),
+    ("CEO resigns in disgrace", "NOVA", ["NOVA"]),
+    ("Fed announces emergency rate cut", None, ["GPU", "ROBO", "NOVA", "MEME"]),
+])
+def test_news_routing(text, focus, expected):
+    assert route_news(text, focus) == expected
+
+
+def test_mock_chatter_is_varied():
+    async def run():
+        sim = Simulation(MockBrain(random.Random(1)), n_agents=60, workers=12, seed=1)
+        sim.start()
+        await sim.add_news("GPU smashes earnings, record profit", "crowd", "test")
+        await asyncio.sleep(3)
+        await sim.stop()
+        return [f.thought for f in sim.world.feed if f.action != "hold"]
+
+    posts = asyncio.run(run())
+    assert len(posts) > 20
+    assert len(set(posts)) / len(posts) > 0.9  # almost nothing repeats
+
+
 def test_simulation_runs_and_reacts():
     async def run():
         sim = Simulation(MockBrain(random.Random(0)), n_agents=60, workers=12, seed=0)
         sim.start()
         await sim.add_news("GPU CEO arrested over fraud probe", "crowd", "test")
         p = sim.join("Neil")
-        await sim.human_trade(p.id, "buy", 10)
+        await sim.human_trade(p.id, "buy", 10, "MEME")
         await asyncio.sleep(3)
         snap = sim.snapshot()
         await sim.stop()
@@ -91,7 +131,31 @@ def test_simulation_runs_and_reacts():
 
     sim, snap, p = asyncio.run(run())
     assert len(sim.world.feed) > 10
+    assert {f.ticker for f in sim.world.feed} > {"GPU"}  # agents trade more than one stock
     assert snap["leaderboard"] and any(r["key"] == "human" for r in snap["leaderboard"])
-    assert sim.portfolio(p.id)["shares"] >= 50
+    pos = {x["ticker"]: x for x in sim.portfolio(p.id)["positions"]}
+    assert pos["MEME"]["shares"] == 250 + 10 and pos["MEME"]["avg_cost"] is not None
     sim.reset()
-    assert sim.player(p.id) is not None and sim.world.exchange.accounts[p.id].shares == 50
+    assert sim.player(p.id) is not None and sim.world.markets["MEME"].exchange.accounts[p.id].shares == 250
+
+
+def test_round_ends_and_blocks_trading():
+    async def run():
+        sim = Simulation(MockBrain(random.Random(2)), n_agents=30, workers=4, seed=2)
+        events = []
+
+        async def listen(e):
+            events.append(e["type"])
+        sim.listeners.append(listen)
+        sim.start()
+        p = sim.join("Ann")
+        await sim.start_round(1)
+        sim.round_end = time.time() + 0.6
+        await asyncio.sleep(1.5)
+        with pytest.raises(ValueError):
+            await sim.human_trade(p.id, "buy", 1)
+        await sim.stop()
+        return events
+
+    events = asyncio.run(run())
+    assert "round_over" in events

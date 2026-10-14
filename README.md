@@ -2,12 +2,22 @@
 
 **Your family vs. 300 AI traders, live on the living-room TV.**
 
-Flash Crash is a party game: a stock market for one fake company, **$GPU**, run by hundreds of LLM agents with
+Flash Crash is a party game: a stock market of four fake companies, run by hundreds of LLM agents with
 personalities, including Reddit degens, Buffett-style value investors, panic-selling retirees, momentum quants,
-conspiracy theorists and hedge-fund whales. The market plays out on the **Fire TV**. Everyone in the room scans a QR code and
-trades against the AIs from their phone, or **leaks fake breaking news** ("GPU CEO arrested at the airport") by typing or
-speaking it. Every agent reads the headline, argues about it on its timeline, and trades. Bubbles, panics and flash crashes
-emerge on their own. **Alexa+** (or any AI agent) can join in over **MCP**: *"Alexa, leak that GPU just won a NASA contract."*
+conspiracy theorists and hedge-fund whales:
+
+| Stock | Company | Character |
+|---|---|---|
+| **$GPU** | Green Processing Unlimited | AI chip maker, deep and steady |
+| **$ROBO** | RoboRide | self-driving robotaxi fleet |
+| **$NOVA** | Nova Fusion | fusion power startup |
+| **$MEME** | Doge Burger | meme-stock fast food, thin book, wild swings |
+
+The market plays out on the **Fire TV**. Everyone in the room scans a QR code and trades against the AIs from their phone,
+or **leaks fake breaking news** ("Doge Burger adds a $1,000 golden burger") by typing or speaking it. The headline is routed
+to the company it names, every agent that's watching reads it, argues about it on its timeline, and trades. Bubbles, panics
+and flash crashes emerge on their own. Play free-form or in **timed 5-minute rounds** that end on a podium.
+**Alexa+** (or any AI agent) can join in over **MCP**: *"Alexa, leak that RoboRide just got approved in every city."*
 
 ![TV dashboard](docs/tv.png)
 
@@ -25,14 +35,20 @@ emerge on their own. **Alexa+** (or any AI agent) can join in over **MCP**: *"Al
                                                     └──────────── WebSocket push ────────────┘
 ```
 
-* **Agents** (`flashcrash/personas.py`): 11 archetypes. Each agent has its own name, bankroll, risk appetite, private
-  fair-value belief and short memory of its last thoughts.
-* **Brain** (`flashcrash/brain.py`): each turn, an agent receives the market (price path, best bid/ask), its portfolio, the latest
-  headlines and three posts from other agents' timelines, which is what makes herding contagious. It replies with JSON:
+* **Agents** (`flashcrash/personas.py`): 11 archetypes. Each agent has its own name, bankroll, risk appetite, favourite
+  stocks, private fair-value beliefs, a **posting quirk** (talks like a pirate, quotes Sun Tzu, blames the Fed, ...) and a
+  short memory of its last posts.
+* **Attention**: each turn an agent picks a stock to look at: mostly its favourites, but fresh headlines and big moves pull
+  the whole crowd in, so money rotates between stocks as the news breaks.
+* **Brain** (`flashcrash/brain.py`): the agent receives that stock's market (price path, best bid/ask), its holdings, the
+  headlines about it and three posts from other agents' timelines, which is what makes herding contagious. It replies with JSON:
   `{"action","qty","price","thought"}`. Most agents run on a fast model; whales use a bigger reasoning model. A 24-wide async
   worker pool streams decisions into the market continuously.
-* **Exchange** (`flashcrash/market.py`): a real limit order book with price-time priority, cash and share reservations,
-  no shorting and no self-trading. A market maker quotes around a slow-moving average, so noise is absorbed but news gets through.
+* **Exchange** (`flashcrash/market.py`): one limit order book per stock with price-time priority, cash and share reservations,
+  no shorting and no self-trading. Each trader has one cash wallet shared across every book. Market makers quote around a
+  slow-moving average, so noise is absorbed but news gets through.
+* **News routing** (`flashcrash/sim.py`): a headline that names a company hits that stock; industry words ("robotaxi",
+  "fusion", "chips") find the right one; otherwise it's macro news ("Fed cuts rates") and moves everything a little.
 * **Science panel**: the footer tracks *stylized facts* of real markets as they emerge: fat tails (excess kurtosis),
   volatility clustering, drawdown and a herding index.
 
@@ -44,7 +60,23 @@ cp .env.example .env        # add a key, or leave empty for offline mock mode
 uv run flash-crash          # http://localhost:8000/tv  ·  phones: scan the QR code
 ```
 
-With no API key, agents use rule-based persona brains (badge: **OFFLINE MOCK**), so the full game works offline.
+With no API key, agents use rule-based persona brains (badge: **OFFLINE MOCK**) with an offline voice
+(`flashcrash/chatter.py`): archetype lines, reactions to the headline, replies to other traders and quirks, never repeating,
+so the full game works offline.
+
+## The phone controller (`/play`)
+
+A first-run tutorial, then four tabs:
+
+* **📈 Trade**: pick a stock, see its live chart with your buys/sells and your average cost marked, pick 1/10/50/100/MAX or any
+  number, buy or sell. Chart options: 2s/10s/30s/1m candles, candles or line, and **indicators**: volume, SMA 20, EMA 9,
+  Bollinger Bands, VWAP, RSI 14, MACD.
+* **📰 Leak**: type or speak a headline, aim it at a stock or the whole market, or let the AI newsroom write one. 20 seconds
+  later you're told how much your leak moved the price.
+* **💬 Chatter**: breaking news and the AI timeline, filterable to one stock.
+* **💼 Portfolio**: positions with P&L, the player leaderboard, which AI personalities are winning, and your trade history.
+
+Achievements pop up as you play (first trade, up 10%, top 10 of all traders, beating every AI type, moving a stock 5% with a leak).
 
 ### AI providers (OpenAI-compatible, pick one)
 
@@ -60,8 +92,9 @@ With no API key, agents use rule-based persona brains (badge: **OFFLINE MOCK**),
 
 The `firetv/` app is a native Fire OS (Android) app: a full-screen WebView tuned for the 10-foot UI.
 
-* **D-pad** ◀ ▶ moves between controls; **OK** fires the selected one
-* **Play/Pause** pauses the market, **Fast-forward** asks the AI newsroom for a chaos headline, **Rewind** starts a new round
+* **D-pad** ▲ ▼ switches the stock on the big chart (it also jumps to whichever stock is in the news); ◀ ▶ moves between
+  controls; **OK** fires the selected one
+* **Play/Pause** pauses the market, **Fast-forward** asks the AI newsroom for a chaos headline, **Rewind** starts a 5-minute round
 * **Menu** opens server settings
 
 ```bash
@@ -78,11 +111,11 @@ The server exposes an MCP endpoint (spec 2025-11-25+, **Streamable HTTP**) at `/
 
 | Tool | What it does |
 |---|---|
-| `market_status` | price, move today, who's winning, latest headline |
-| `leak_news` | inject a headline that every agent reacts to |
+| `market_status` | every stock's price and move, who's winning, round clock, latest headline |
+| `leak_news` | inject a headline (optionally aimed at a ticker) that every agent reacts to |
 | `chaos` | ask the AI newsroom for a surprise headline |
-| `trade` | buy or sell for a named human player |
-| `control` | pause / resume / reset / autopilot news |
+| `trade` | buy or sell a stock for a named human player |
+| `control` | start a timed round / pause / resume / reset / autopilot news |
 
 Connect any MCP client to `http://<host>:8000/mcp`. DNS-rebinding protection only accepts requests addressed to localhost,
 the LAN IP, `PUBLIC_URL` or `MCP_ALLOWED_HOSTS`.
@@ -93,8 +126,8 @@ the LAN IP, `PUBLIC_URL` or `MCP_ALLOWED_HOSTS`.
 
 ## Tests
 
-`uv run pytest`: order book invariants (cash and share conservation across 3,000 random orders), reply parsing for
-messy LLM output, and an end-to-end simulation run.
+`uv run pytest`: order book invariants (cash and share conservation across 3,000 random orders, one wallet shared across
+books), reply parsing for messy LLM output, news routing, chatter variety, timed rounds and an end-to-end simulation run.
 
 ## Security notes
 

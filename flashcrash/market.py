@@ -13,12 +13,36 @@ from dataclasses import dataclass, field
 
 
 @dataclass
-class Account:
+class Wallet:
+    """Cash, shared by one trader's accounts across every stock's exchange."""
     cash: float
-    shares: int
     reserved_cash: float = 0.0
-    reserved_shares: int = 0
-    start_equity: float = 0.0
+
+
+class Account:
+    """A trader's position in one stock. Cash lives in a Wallet that several exchanges can share."""
+
+    def __init__(self, cash: float = 0.0, shares: int = 0, wallet: Wallet | None = None):
+        self.wallet = wallet if wallet is not None else Wallet(cash)
+        self.shares = shares
+        self.reserved_shares = 0
+        self.start_equity = 0.0
+
+    @property
+    def cash(self) -> float:
+        return self.wallet.cash
+
+    @cash.setter
+    def cash(self, v: float) -> None:
+        self.wallet.cash = v
+
+    @property
+    def reserved_cash(self) -> float:
+        return self.wallet.reserved_cash
+
+    @reserved_cash.setter
+    def reserved_cash(self, v: float) -> None:
+        self.wallet.reserved_cash = v
 
     @property
     def free_cash(self) -> float:
@@ -63,8 +87,8 @@ class Exchange:
         self.trade_listeners: list = []
 
     # --- accounts -------------------------------------------------------
-    def open_account(self, agent_id: str, cash: float, shares: int) -> Account:
-        acct = Account(cash=cash, shares=shares)
+    def open_account(self, agent_id: str, cash: float, shares: int, wallet: Wallet | None = None) -> Account:
+        acct = Account(cash, shares, wallet)
         acct.start_equity = acct.equity(self.last_price)
         self.accounts[agent_id] = acct
         return acct

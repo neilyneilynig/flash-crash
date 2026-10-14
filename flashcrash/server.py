@@ -126,6 +126,7 @@ class NewsIn(BaseModel):
     text: str
     source: str = "crowd"
     author: str = "anon"
+    ticker: str | None = None  # the stock the leaker was looking at
 
 
 @app.post("/api/news")
@@ -133,13 +134,17 @@ async def post_news(body: NewsIn):
     if not body.text.strip():
         raise HTTPException(400, "empty headline")
     source = body.source if body.source in ("crowd", "voice") else "crowd"
-    return (await sim.add_news(body.text, source, body.author[:20])).as_dict()
+    return (await sim.add_news(body.text, source, body.author[:20], body.ticker)).as_dict()
+
+
+class ChaosIn(BaseModel):
+    ticker: str | None = None
 
 
 @app.post("/api/news/chaos")
-async def chaos():
+async def chaos(body: ChaosIn | None = None):
     try:
-        return (await sim.newsroom()).as_dict()
+        return (await sim.newsroom(body.ticker if body else None)).as_dict()
     except Exception as e:
         raise HTTPException(502, f"newsroom failed: {e}")
 
@@ -161,17 +166,23 @@ async def real_news(body: RealIn):
 
 class ControlIn(BaseModel):
     action: str
+    minutes: float = 5
 
 
 @app.post("/api/control")
 async def control(body: ControlIn):
     a = body.action
-    if a == "pause":
+    if a in ("resume", "toggle_pause") and sim.round_over:
+        sim.round_minutes = 0  # back to free play with the final positions
+        sim.paused = False
+    elif a == "pause":
         sim.paused = True
     elif a == "resume":
         sim.paused = False
     elif a == "toggle_pause":
         sim.paused = not sim.paused
+    elif a == "start_round":
+        await sim.start_round(min(30.0, max(1.0, body.minutes)))
     elif a == "reset":
         sim.reset()
         await hub.send_all({"type": "reset", "data": {**sim.snapshot(), **sim.history()}})
@@ -196,6 +207,7 @@ class TradeIn(BaseModel):
     id: str
     side: str
     qty: int | str
+    ticker: str = "GPU"
 
 
 @app.post("/api/trade")
@@ -204,16 +216,19 @@ async def trade(body: TradeIn):
         raise HTTPException(400, "side must be buy or sell")
     if sim.player(body.id) is None:
         raise HTTPException(404, "unknown player, join again")
-    qty = body.qty if body.qty == "all" else max(1, int(body.qty))
-    item = await sim.human_trade(body.id, body.side, qty)
-    return {"filled": item.filled, "price": sim.price, **sim.portfolio(body.id)}
+    try:
+        qty = body.qty if body.qty == "all" else max(1, int(body.qty))
+        item = await sim.human_trade(body.id, body.side, qty, body.ticker)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    return {"filled": item.filled, "fill_price": item.fill_price, "ticker": item.ticker, **sim.portfolio(body.id)}
 
 
 @app.get("/api/me/{pid}")
 def me(pid: str):
     if sim.player(pid) is None:
         raise HTTPException(404, "unknown player")
-    return {"price": sim.price, **sim.portfolio(pid)}
+    return sim.portfolio(pid)
 
 
 @app.websocket("/ws")

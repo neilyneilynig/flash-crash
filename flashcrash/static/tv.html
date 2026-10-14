@@ -11,11 +11,12 @@
   <header id="top">
     <div class="brand"><span class="bolt">⚡</span>FLASH<span class="crash">CRASH</span></div>
     <div class="quote">
-      <span class="sym">$GPU</span>
+      <span class="sym" id="sym">$GPU</span>
       <span id="price">100.00</span>
       <span id="change" class="chg">+0.00%</span>
     </div>
     <div class="meta">
+      <div id="round" class="hidden"><b id="round-left">5:00</b><small>round</small></div>
       <div><b id="agents">0</b><small>AI traders</small></div>
       <div><b id="cpm">0</b><small>decisions/min</small></div>
       <div><b id="tps">0</b><small>tokens/s</small></div>
@@ -25,17 +26,19 @@
 
   <main>
     <section id="left">
+      <div id="tickers"></div>
       <div id="chart"></div>
       <div id="headline-bar"><span class="tag">BREAKING</span><span id="headline">Waiting for news… scan the code and leak something.</span></div>
       <nav id="controls">
         <button class="btn hot" data-act="chaos">🎲 AI chaos news</button>
-        <button class="btn" data-news="GPU CEO arrested at the airport">🚔 CEO arrested</button>
-        <button class="btn" data-news="Fed announces surprise emergency rate cut">🏦 Fed cuts rates</button>
-        <button class="btn" data-news="GPU wins $50B contract to power every robot on Earth">🤖 Mega contract</button>
+        <button class="btn" data-news="{co} CEO arrested at the airport">🚔 CEO arrested</button>
+        <button class="btn" data-news="{co} wins a $50B mega contract, record profit expected">🤝 Mega deal</button>
+        <button class="btn" data-news="Fed announces surprise emergency rate cut">🏦 Fed cut</button>
         <button class="btn" data-act="real" id="btn-real">🌍 Real news</button>
-        <button class="btn" data-act="toggle_autopilot" id="btn-auto">📰 Autopilot: off</button>
+        <button class="btn" data-act="toggle_autopilot" id="btn-auto">📰 Auto: off</button>
         <button class="btn" data-act="toggle_pause" id="btn-pause">⏸ Pause</button>
-        <button class="btn" data-act="reset">🔄 New round</button>
+        <button class="btn round" data-act="start_round">🏁 5-min round</button>
+        <button class="btn" data-act="reset">🔄 Reset</button>
       </nav>
     </section>
 
@@ -65,11 +68,17 @@
     <span>Max drawdown <b id="s-dd">–</b></span>
     <span>Herding <b id="s-herd">–</b></span>
     <span>Volume <b id="s-vol">0</b></span>
-    <span class="hint">◀ ▶ remote to choose · OK to fire</span>
+    <span class="hint">▲ ▼ switch stock · ◀ ▶ choose · OK to fire</span>
   </footer>
 
   <div id="flash" class="hidden"><div class="flash-tag">BREAKING</div><div id="flash-text"></div><div id="flash-src"></div></div>
   <div id="alarm" class="hidden"></div>
+  <div id="podium" class="hidden">
+    <div class="pod-title">🏁 ROUND OVER</div>
+    <ol id="pod-list"></ol>
+    <div id="pod-ai"></div>
+    <div class="pod-hint">Press 🏁 for another round · ⏯ for free play</div>
+  </div>
 </div>
 <script src="/static/vendor/lightweight-charts.js"></script>
 <script src="/static/vendor/qrcode.js"></script>

@@ -8,73 +8,88 @@ from __future__ import annotations
 
 from mcp.server.mcpserver import MCPServer
 
-from .personas import COMPANY, TICKER
+from .personas import STOCKS
 from .sim import Simulation
+
+LISTING = ", ".join(f"${s.ticker} ({s.company}, {s.blurb})" for s in STOCKS)
 
 
 def build_mcp(sim: Simulation) -> MCPServer:
     mcp = MCPServer(
         name="flash-crash",
         title="Flash Crash",
-        description=f"A live stock market for ${TICKER} run by hundreds of AI traders.",
+        description="A live stock market run by hundreds of AI traders.",
         instructions=(
-            f"Flash Crash is a living-room game: a fake stock ${TICKER} ({COMPANY}) traded by hundreds of AI agents "
+            f"Flash Crash is a living-room game: fake stocks {LISTING} traded by hundreds of AI agents "
             "with personalities (degens, value investors, panic sellers, whales). Players move the market by leaking "
             "breaking news and by trading. Keep spoken answers short and dramatic."
         ),
-        version="0.1.0",
+        version="0.2.0",
     )
 
     @mcp.tool(title="Market status")
     def market_status() -> dict:
-        """Current price, move since open, which trader types are winning, and the latest headline."""
+        """Prices and moves for every stock, which trader types are winning, the round clock and the latest headline."""
         s = sim.snapshot()
         news = sim.world.news[-1].text if sim.world.news else None
         top = s["leaderboard"][:3]
+        mk = s["markets"]
+        best = max(mk, key=lambda m: m["change_pct"])
+        worst = min(mk, key=lambda m: m["change_pct"])
         return {
-            "ticker": TICKER,
-            "price": s["price"],
-            "change_pct": s["change_pct"],
+            "stocks": [{"ticker": m["ticker"], "price": m["price"], "change_pct": m["change_pct"]} for m in mk],
             "ai_traders": s["agents"],
             "winning": [f"{r['label']} {r['pnl_pct']:+.1f}%" for r in top],
-            "losing": [f"{r['label']} {r['pnl_pct']:+.1f}%" for r in s["leaderboard"][-2:]],
+            "players": [f"{p['name']} {p['pnl_pct']:+.1f}%" for p in s["players"][:5]],
+            "round_seconds_left": s["round_left"],
             "latest_headline": news,
-            "summary": f"${TICKER} is at ${s['price']:.2f}, {s['change_pct']:+.1f}% today. "
-                       f"{top[0]['label']}s are winning." if top else "",
+            "summary": f"${best['ticker']} is the top mover at {best['change_pct']:+.1f}%, "
+                       f"${worst['ticker']} the worst at {worst['change_pct']:+.1f}%. "
+                       + (f"{top[0]['label']}s are winning." if top else ""),
         }
 
     @mcp.tool(title="Leak breaking news")
-    async def leak_news(headline: str, author: str = "Alexa") -> dict:
-        """Inject a breaking-news headline into the market. Every AI trader will read it and react.
-        Example: 'GPU CEO arrested at the airport' or 'GPU wins giant contract with NASA'."""
-        price_before = sim.price
-        item = await sim.add_news(headline, "alexa", author)
-        return {"ok": True, "headline": item.text, "price_at_leak": round(price_before, 2),
+    async def leak_news(headline: str, author: str = "Alexa", ticker: str | None = None) -> dict:
+        """Inject a breaking-news headline. Every AI trader reads it and reacts. Name a company in the
+        headline (GPU, RoboRide, Nova Fusion, Doge Burger) or pass ticker; otherwise it's market-wide news.
+        Example: 'GPU CEO arrested at the airport' or 'Doge Burger adds a golden burger'."""
+        item = await sim.add_news(headline, "alexa", author, ticker)
+        return {"ok": True, "headline": item.text, "stocks": item.tickers, "prices_at_leak": item.prices,
                 "message": "Headline is live. Watch the traders react on the TV."}
 
     @mcp.tool(title="Chaos headline")
-    async def chaos() -> dict:
-        """Ask the AI newsroom to invent a surprise market-moving headline."""
-        item = await sim.newsroom()
-        return {"ok": True, "headline": item.text}
+    async def chaos(ticker: str | None = None) -> dict:
+        """Ask the AI newsroom to invent a surprise market-moving headline (optionally about one ticker)."""
+        item = await sim.newsroom(ticker)
+        return {"ok": True, "headline": item.text, "stocks": item.tickers}
 
     @mcp.tool(title="Trade")
-    async def trade(player: str, side: str, shares: int) -> dict:
-        """Buy or sell shares for a human player (joins them automatically). side is 'buy' or 'sell'."""
+    async def trade(player: str, side: str, shares: int, ticker: str = "GPU") -> dict:
+        """Buy or sell shares of a stock for a human player (joins them automatically).
+        side is 'buy' or 'sell'; ticker is one of GPU, ROBO, NOVA, MEME."""
         if side not in ("buy", "sell"):
             return {"ok": False, "error": "side must be buy or sell"}
         p = next((a for a in sim.world.agents.values() if a.human and a.name.lower() == player.lower()), None)
         p = p or sim.join(player)
-        item = await sim.human_trade(p.id, side, max(1, int(shares)))
-        return {"ok": True, "filled": item.filled, "price": round(sim.price, 2), "portfolio": sim.portfolio(p.id)}
+        try:
+            item = await sim.human_trade(p.id, side, max(1, int(shares)), ticker)
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+        return {"ok": True, "ticker": item.ticker, "filled": item.filled, "price": item.fill_price,
+                "portfolio": sim.portfolio(p.id)}
 
     @mcp.tool(title="Control game")
-    async def control(action: str) -> dict:
-        """Control the game: 'pause', 'resume', 'reset' (new round), 'autopilot_on' or 'autopilot_off' (AI news every ~40s)."""
+    async def control(action: str, minutes: float = 5) -> dict:
+        """Control the game: 'start_round' (timed round, default 5 minutes, fresh bankrolls), 'pause', 'resume',
+        'reset' (new free-play market), 'autopilot_on' or 'autopilot_off' (AI news every ~40s)."""
         if action == "pause":
             sim.paused = True
         elif action == "resume":
             sim.paused = False
+            if sim.round_over:
+                sim.round_minutes = 0
+        elif action == "start_round":
+            await sim.start_round(min(30.0, max(1.0, minutes)))
         elif action == "reset":
             sim.reset()
         elif action in ("autopilot_on", "autopilot_off"):

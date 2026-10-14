@@ -17,7 +17,8 @@ import re
 import time
 from dataclasses import dataclass
 
-from .personas import COMPANY, TICKER, Agent
+from .chatter import Chatter
+from .personas import BY_TICKER, STOCKS, Agent
 
 
 @dataclass
@@ -53,32 +54,38 @@ class BrainStats:
         }
 
 
-SYSTEM = """You are {name} (@{handle}), a trader in a live stock market.
-The only stock is ${ticker} ({company}), an AI chip maker.
+SYSTEM = """You are {name} (@{handle}), a trader in a live stock market with these stocks:
+{listing}
 Your persona: {persona}
-{fair}
-Stay fully in character. Decide your next trade from the market data, the news and your timeline.
+Your posting style: {quirk}.
+Stay fully in character. Decide your next trade in ${ticker} from the market data, the news and your timeline.
+Your post must be unique and specific: react to the latest headline, the price move, or reply to another trader by @handle.
+Never repeat your previous posts.
 Reply with ONLY a JSON object, no prose, no markdown:
-{{"action":"buy"|"sell"|"hold","qty":<integer shares>,"price":<limit price number or null for market order>,"thought":"<your in-character post, max 20 words>"}}"""
+{{"action":"buy"|"sell"|"hold","qty":<integer shares>,"price":<limit price number or null for market order>,"thought":"<your in-character post, max 25 words>"}}"""
+
+LISTING = "\n".join(f"- ${st.ticker}: {st.company}, {st.blurb}" for st in STOCKS)
 
 
 def build_messages(agent: Agent, ctx: dict) -> list[dict]:
     a = agent.archetype
-    fair = f"You privately estimate fair value at ${agent.fair_value:.2f}." if a.value > 0 else ""
-    system = SYSTEM.format(name=agent.name, handle=agent.handle, ticker=TICKER, company=COMPANY,
-                           persona=a.description, fair=fair)
+    tk = ctx["ticker"]
+    fair = f" You privately think ${tk} is worth about ${ctx['fair'] * BY_TICKER[tk].price:.2f}." if a.value > 0 else ""
+    system = SYSTEM.format(name=agent.name, handle=agent.handle, listing=LISTING, persona=a.description + fair,
+                           quirk=agent.quirk or "plain", ticker=tk)
     news = "\n".join(f"- [{n['age']}s ago] {n['text']}" for n in ctx["news"]) or "- (nothing new)"
-    timeline = "\n".join(f"- @{p['handle']}: {p['text']}" for p in ctx["timeline"]) or "- (quiet)"
-    memory = " | ".join(agent.memory[-2:]) or "(none)"
-    user = f"""MARKET ${TICKER}: last ${ctx['price']:.2f} ({ctx['change_pct']:+.1f}% today), bid {ctx['bid']} / ask {ctx['ask']}
+    timeline = "\n".join(f"- @{p['handle']} on ${p['ticker']}: {p['text']}" for p in ctx["timeline"]) or "- (quiet)"
+    memory = " | ".join(agent.memory[-3:]) or "(none)"
+    holdings = ", ".join(f"{q} ${t}" for t, q in ctx["holdings"].items() if q) or "nothing"
+    user = f"""NOW TRADING ${tk}: last ${ctx['price']:.2f} ({ctx['change_pct']:+.1f}% today), bid {ctx['bid']} / ask {ctx['ask']}
 Recent closes (oldest->newest): {', '.join(f'{p:.2f}' for p in ctx['closes'])}
-YOU: cash ${ctx['cash']:,.0f}, {ctx['shares']} shares, P&L {ctx['pnl_pct']:+.1f}%. Max buy ~{ctx['max_buy']} shares, max sell {ctx['max_sell']}.
+YOU: cash ${ctx['cash']:,.0f}, own {holdings}. Total P&L {ctx['pnl_pct']:+.1f}%. Max buy ~{ctx['max_buy']} ${tk}, max sell {ctx['max_sell']}.
 NEWS:
 {news}
 YOUR TIMELINE:
 {timeline}
-Your last thoughts: {memory}
-Your move?"""
+Your last posts (don't repeat them): {memory}
+Your move on ${tk}?"""
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
@@ -225,10 +232,10 @@ class LLMBrain:
 
     async def write_headline(self, ctx: dict) -> str:
         msgs = [
-            {"role": "system", "content": f"You are the chaos editor of a financial newswire covering ${TICKER} ({COMPANY}), an AI chip maker. "
-                                           "Write ONE surprising, plausible, punchy breaking-news headline (max 14 words) that will move the stock. "
+            {"role": "system", "content": f"You are the chaos editor of a financial newswire covering ${ctx['ticker']} ({ctx['company']}, a {ctx['blurb']}). "
+                                           f"Write ONE surprising, funny but plausible breaking-news headline (max 14 words) that names {ctx['company']} or ${ctx['ticker']} and will move the stock. "
                                            "Mix good and bad news; twists are welcome. Reply with the headline only."},
-            {"role": "user", "content": f"Price ${ctx['price']:.2f} ({ctx['change_pct']:+.1f}% today). Recent headlines: "
+            {"role": "user", "content": f"${ctx['ticker']} at ${ctx['price']:.2f} ({ctx['change_pct']:+.1f}% today). Recent headlines: "
                                          + "; ".join(n["text"] for n in ctx["news"]) + "\nNext headline:"},
         ]
         text, _, _ = await self.complete(msgs, max_tokens=60)
@@ -238,23 +245,20 @@ class LLMBrain:
 # ----------------------------------------------------------------------------------------
 # Mock brain: deterministic-ish persona rules so the whole game runs offline.
 
-_POS = "beat beats record surge soar soars rally partnership approve approved launch launches cut cuts upgrade buyback profit wins win breakthrough moon acquire acquires deal boom bullish rate cut".split()
-_NEG = "arrested fraud lawsuit recall crash miss misses ban banned downgrade probe hack hacked layoffs resign resigns delay delays fire fires scandal bankrupt collapse investigation tariff shortage bearish".split()
+_POS = """beat beats record surge surges soar soars rally rallies partnership partners approve approved launch launches cut cuts
+upgrade upgraded buyback profit profits wins win won breakthrough moon acquire acquires deal boom bullish golden sells sold
+celebrate celebrates gain gains raises raised accept accepts added joins smashes stunned faster contract contracts invest
+invests stake viral rocket hit hits best skyrocket skyrockets jumps doubles triples mega giant genius loves""".split()
+_NEG = """arrested fraud lawsuit sued recall recalls crash crashes miss misses ban banned downgrade downgraded probe hack hacked
+hackers breach layoffs resign resigns delay delays fire fires scandal bankrupt bankruptcy collapse collapses investigation
+tariff tariffs shortage bearish lake explodes explosion evacuated incident leaked drops dropped regret furious halts halted
+fake plunge plunges short worst fails failed failure loses lost recession fears dies dead toxic poison sink sinks""".split()
 
 
 def sentiment(text: str) -> float:
     words = re.findall(r"[a-z]+", text.lower())
     s = sum(w in _POS for w in words) - sum(w in _NEG for w in words)
     return max(-1.0, min(1.0, s / 2))
-
-
-_LINES = {
-    "buy": ["Loading up 🚀", "This is the bottom, I can feel it", "Buying the dip, obviously", "Fundamentals > feelings. Buying.",
-            "Can't miss this move", "Adding to my position", "Probability-weighted entry. Long.", "They can't stop this train"],
-    "sell": ["I'm out. Not today.", "Taking profits before the rug", "This smells like 2008", "Selling, sorry not sorry",
-             "Risk off. Cash is a position.", "Getting out before the herd", "Trend broken. Exiting.", "Nope nope nope"],
-    "hold": ["Watching closely 👀", "Holding. Patience.", "Not touching this chop", "Waiting for confirmation", "Diamond hands 💎"],
-}
 
 
 class MockBrain:
@@ -265,6 +269,7 @@ class MockBrain:
     def __init__(self, rng: random.Random | None = None):
         self.rng = rng or random.Random()
         self.stats = BrainStats(started=time.time())
+        self.chatter = Chatter(self.rng)
 
     async def resolve_models(self) -> None:
         return None
@@ -277,8 +282,8 @@ class MockBrain:
         mom = max(-1.2, min(1.2, mom - 0.25 if mom > 0.25 else mom + 0.25 if mom < -0.25 else 0.0))  # ignore chop
         news = sum(sentiment(n["text"]) * max(0.0, 1 - n["age"] / 60) for n in ctx["news"][:3])
         herd = sum(p["side"] for p in ctx["timeline"]) / max(1, len(ctx["timeline"]))
-        anchor = ctx.get("anchor", 100.0)
-        val = (agent.fair_value / 100.0 * anchor / ctx["price"] - 1) * 5
+        anchor = ctx["anchor"]
+        val = (ctx["fair"] * anchor / ctx["price"] - 1) * 5
         gravity = (anchor / ctx["price"] - 1) * 6  # everyone eventually feels an absurd price
         score = (a.momentum * mom + a.news * news * 1.5 + a.value * val + 0.25 * herd * a.momentum
                  + gravity + r.gauss(0, a.noise * 1.5))
@@ -291,32 +296,55 @@ class MockBrain:
         self.stats.calls += 1
         self.stats.latency_total += 0.4
         if abs(score) < 0.35:
-            return Decision("hold", 0, None, r.choice(_LINES["hold"]), "mock")
+            return Decision("hold", 0, None, self.chatter.post(agent, "hold", ctx, sentiment), "mock")
         side = "buy" if score > 0 else "sell"
         frac = min(1.0, a.size * agent.risk * min(2.5, abs(score)))
         qty = int((ctx["max_buy"] if side == "buy" else ctx["max_sell"]) * frac)
+        if qty <= 0:  # wants to trade but can't (no cash / no shares): just post
+            return Decision("hold", 0, None, self.chatter.post(agent, "hold", ctx, sentiment), "mock")
         price = None
         if r.random() < 0.75:  # mostly limit orders near the touch
             off = r.uniform(-0.004, 0.006) * (1 if side == "buy" else -1)
             price = round(ctx["price"] * (1 + off), 2)
-        return Decision(side, qty, price, r.choice(_LINES[side]), "mock")
+        return Decision(side, qty, price, self.chatter.post(agent, side, ctx, sentiment), "mock")
 
     async def write_headline(self, ctx: dict) -> str:
-        return self.rng.choice(MOCK_HEADLINES)
+        pool = MOCK_HEADLINES.get(ctx["ticker"], []) + GENERIC_HEADLINES
+        return self.rng.choice(pool).format(t="$" + ctx["ticker"], co=ctx["company"])
 
 
-MOCK_HEADLINES = [
-    f"{COMPANY} CEO arrested at airport over undisclosed crypto fraud",
-    f"{COMPANY} wins $40B contract to power every data center on the Moon",
-    f"Regulators open probe into ${TICKER} accounting practices",
-    f"${TICKER} unveils chip 10x faster than anything on Earth, analysts stunned",
+GENERIC_HEADLINES = [
+    "{co} CEO arrested at airport over undisclosed crypto fraud",
+    "Regulators open fraud probe into {t} accounting",
+    "Mystery whale buys 5% stake in {t} overnight",
+    "{co} announces $20B buyback and record profit",
+    "{co} CFO resigns abruptly, cites 'vibes'",
+    "{co} smashes earnings, raises guidance for the year",
+    "Hackers breach {co}, customer data leaked",
+    "{co} added to the S&P 500, index funds must buy",
+    "Short seller publishes 90-page report calling {t} a fraud",
     "Fed surprises markets with emergency rate cut",
-    f"Factory fire halts ${TICKER} production for three months",
-    f"Mystery whale buys 5% stake in ${TICKER} overnight",
-    f"${TICKER} announces $20B buyback and record profit",
-    f"Major customer reportedly drops ${TICKER} for rival chips",
-    "Global chip shortage worsens as tariffs bite",
+    "Global recession fears grow as tariffs bite",
 ]
+
+MOCK_HEADLINES = {
+    "GPU": ["{co} wins $40B contract to power every data center on the Moon",
+            "{t} unveils chip 10x faster than anything on Earth, analysts stunned",
+            "Factory fire halts {co} chip production for three months",
+            "Major customer reportedly drops {t} for rival chips"],
+    "ROBO": ["{co} robotaxi drives itself into a lake on live TV",
+             "{co} approved to run driverless taxis in every US city",
+             "{co} recalls 80,000 robotaxis after they start honking at pigeons",
+             "{co} partners with the biggest ride-hailing app for a global launch"],
+    "NOVA": ["{co} reactor hits net energy gain, physicists celebrate",
+             "{co} test reactor delays launch again, investors furious",
+             "{co} signs deal to power the entire national grid",
+             "{co} lab evacuated after 'minor' plasma incident"],
+    "MEME": ["{co} adds a $1,000 golden burger to the menu, sells out in an hour",
+             "A famous billionaire tweets a {co} burger with a rocket emoji",
+             "{co} fries recall after customers report they taste like regret",
+             "{co} announces it will accept Dogecoin at every drive-thru"],
+}
 
 
 def make_brain(concurrency: int = 24):
