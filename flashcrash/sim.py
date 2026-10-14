@@ -11,7 +11,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 
-from .brain import Decision, MockBrain
+from .brain import Decision, MockBrain, sentiment
 from .market import Exchange, Trade
 from .personas import ARCHETYPES, Agent, Archetype, spawn_agents
 
@@ -76,6 +76,7 @@ class World:
     news: list[NewsItem] = field(default_factory=list)
     feed: deque = field(default_factory=lambda: deque(maxlen=300))
     open_price: float = INITIAL_PRICE
+    anchor: float = INITIAL_PRICE  # news-driven fundamental value (used by mock brains)
     volume: int = 0
     started: float = field(default_factory=time.time)
 
@@ -202,6 +203,7 @@ class Simulation:
         return {
             "price": price,
             "change_pct": (price / w.open_price - 1) * 100,
+            "anchor": w.anchor,
             "bid": ex.best_bid(),
             "ask": ex.best_ask(),
             "closes": self.closes(),
@@ -258,6 +260,7 @@ class Simulation:
     async def add_news(self, text: str, source: str = "crowd", author: str = "anon") -> NewsItem:
         text = " ".join(text.split())[:160]
         item = NewsItem(next(self._ids), text, source, author, time.time(), self.price)
+        self.world.anchor *= 1 + 0.15 * sentiment(text)
         self.world.news.append(item)
         del self.world.news[:-50]
         await self._emit({"type": "news", "item": item.as_dict()})

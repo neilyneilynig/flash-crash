@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.FlashCrash" parent="@android:style/Theme.Black.NoTitleBar.Fullscreen">
+        <item name="android:windowBackground">@color/bg</item>
+    </style>
+    <color name="bg">#07090D</color>
+    <color name="accent">#FFD23F</color>
+    <color name="dim">#7D8899</color>
+</resources>

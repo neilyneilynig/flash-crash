@@ -29,10 +29,28 @@ STATIC = Path(__file__).parent / "static"
 brain = make_brain(int(os.getenv("CONCURRENCY", "24")))
 sim = Simulation(brain, n_agents=int(os.getenv("AGENTS", "300")), workers=int(os.getenv("CONCURRENCY", "24")))
 mcp = build_mcp(sim)
-mcp_app = mcp.streamable_http_app(
-    streamable_http_path="/mcp",
-    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
-)
+
+
+def lan_ip() -> str:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))
+            return s.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+
+
+def _mcp_security() -> TransportSecuritySettings:
+    """DNS-rebinding protection: only accept MCP calls addressed to this machine or PUBLIC_URL."""
+    from urllib.parse import urlparse
+
+    hosts = ["localhost", "127.0.0.1", lan_ip()]
+    if os.getenv("PUBLIC_URL"):
+        hosts.append(urlparse(os.environ["PUBLIC_URL"]).hostname)
+    hosts += [h.strip() for h in os.getenv("MCP_ALLOWED_HOSTS", "").split(",") if h.strip()]
+    allowed = [h for host in hosts for h in (host, f"{host}:*")]
+    return TransportSecuritySettings(enable_dns_rebinding_protection=True, allowed_hosts=allowed,
+                                     allowed_origins=[f"{scheme}://{h}" for scheme in ("http", "https") for h in allowed])
 
 
 class Hub:
@@ -75,15 +93,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Flash Crash", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
-
-
-def lan_ip() -> str:
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.connect(("10.255.255.255", 1))
-            return s.getsockname()[0]
-    except OSError:
-        return "127.0.0.1"
 
 
 @app.get("/")
@@ -222,6 +231,7 @@ async def ws(websocket: WebSocket):
 
 
 # MCP Streamable HTTP lives at /mcp; mounted last so the routes above win.
+mcp_app = mcp.streamable_http_app(streamable_http_path="/mcp", transport_security=_mcp_security())
 app.mount("/", mcp_app)
 
 

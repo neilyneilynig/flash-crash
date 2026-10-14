@@ -172,7 +172,7 @@ class LLMBrain:
         try:
             ids = [m.id async for m in self.client.models.list()]
         except Exception as e:  # listing is optional; keep configured ids
-            self.stats.last_error = f"models.list: {e}"
+            self.stats.last_error = f"models.list failed: {type(e).__name__}"
             return
 
         def pick(want: str, *hints: str) -> str:
@@ -205,7 +205,9 @@ class LLMBrain:
                     self._no_think = False
                     return await self.complete(messages, big, max_tokens)
                 self.stats.errors += 1
-                self.stats.last_error = f"{type(e).__name__}: {e}"
+                # broadcast to every screen, so keep it to the error type and HTTP status only
+                status = getattr(e, "status_code", None)
+                self.stats.last_error = type(e).__name__ + (f" (HTTP {status})" if status else "")
                 raise
             dt = time.time() - t0
         self.stats.calls += 1
@@ -272,11 +274,14 @@ class MockBrain:
         a, r = agent.archetype, self.rng
         closes = ctx["closes"] or [ctx["price"]]
         mom = (closes[-1] / closes[max(0, len(closes) - 6)] - 1) * 12
-        mom = max(-2.0, min(2.0, mom - 0.25 if mom > 0.25 else mom + 0.25 if mom < -0.25 else 0.0))  # ignore chop
+        mom = max(-1.2, min(1.2, mom - 0.25 if mom > 0.25 else mom + 0.25 if mom < -0.25 else 0.0))  # ignore chop
         news = sum(sentiment(n["text"]) * max(0.0, 1 - n["age"] / 60) for n in ctx["news"][:3])
         herd = sum(p["side"] for p in ctx["timeline"]) / max(1, len(ctx["timeline"]))
-        val = (agent.fair_value / ctx["price"] - 1) * 5
-        score = a.momentum * mom + a.news * news * 1.5 + a.value * val + 0.25 * herd * a.momentum + r.gauss(0, a.noise * 1.5)
+        anchor = ctx.get("anchor", 100.0)
+        val = (agent.fair_value / 100.0 * anchor / ctx["price"] - 1) * 5
+        gravity = (anchor / ctx["price"] - 1) * 6  # everyone eventually feels an absurd price
+        score = (a.momentum * mom + a.news * news * 1.5 + a.value * val + 0.25 * herd * a.momentum
+                 + gravity + r.gauss(0, a.noise * 1.5))
         if a.key == "boomer":
             score = 0.6 + r.gauss(0, 0.3)
         if a.key == "evangelist":
