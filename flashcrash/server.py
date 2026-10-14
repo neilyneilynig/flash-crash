@@ -127,6 +127,7 @@ class NewsIn(BaseModel):
     source: str = "crowd"
     author: str = "anon"
     ticker: str | None = None  # the stock the leaker was looking at
+    player_id: str | None = None  # lets the AI SEC check the leaker's trades
 
 
 @app.post("/api/news")
@@ -134,7 +135,8 @@ async def post_news(body: NewsIn):
     if not body.text.strip():
         raise HTTPException(400, "empty headline")
     source = body.source if body.source in ("crowd", "voice") else "crowd"
-    return (await sim.add_news(body.text, source, body.author[:20], body.ticker)).as_dict()
+    pid = body.player_id if body.player_id and sim.player(body.player_id) else None
+    return (await sim.add_news(body.text, source, body.author[:20], body.ticker, pid)).as_dict()
 
 
 class ChaosIn(BaseModel):
@@ -181,6 +183,8 @@ async def control(body: ControlIn):
         sim.paused = False
     elif a == "toggle_pause":
         sim.paused = not sim.paused
+    elif a == "demo":
+        await sim.demo()
     elif a == "start_round":
         await sim.start_round(min(30.0, max(1.0, body.minutes)))
     elif a == "reset":
@@ -222,6 +226,12 @@ async def trade(body: TradeIn):
     except ValueError as e:
         raise HTTPException(409, str(e))
     return {"filled": item.filled, "fill_price": item.fill_price, "ticker": item.ticker, **sim.portfolio(body.id)}
+
+
+@app.get("/api/explain/{ticker}")
+async def explain(ticker: str):
+    """Market forensics: why did this stock just move?"""
+    return await sim.explain(ticker, 30.0)
 
 
 @app.get("/api/me/{pid}")

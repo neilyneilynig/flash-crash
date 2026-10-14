@@ -27,7 +27,9 @@
   <main>
     <section id="left">
       <div id="tickers"></div>
-      <div id="chart"></div>
+      <div id="chart-wrap"><div id="chart"></div>
+        <div id="why" class="hidden"><div class="why-tag">🔍 WHY <span id="why-move"></span></div><div id="why-text"></div><div id="why-bars"></div></div>
+      </div>
       <div id="headline-bar"><span class="tag">BREAKING</span><span id="headline">Waiting for news… scan the code and leak something.</span></div>
       <nav id="controls">
         <button class="btn hot" data-act="chaos">🎲 AI chaos news</button>
@@ -73,10 +75,12 @@
 
   <div id="flash" class="hidden"><div class="flash-tag">BREAKING</div><div id="flash-text"></div><div id="flash-src"></div></div>
   <div id="alarm" class="hidden"></div>
+  <div id="sec" class="hidden"><div class="sec-tag">🚨 AI SEC INVESTIGATION 🚨</div><div id="sec-title"></div><div id="sec-text"></div></div>
   <div id="podium" class="hidden">
     <div class="pod-title">🏁 ROUND OVER</div>
     <ol id="pod-list"></ol>
     <div id="pod-ai"></div>
+    <div id="pod-recap"></div>
     <div class="pod-hint">Press 🏁 for another round · ⏯ for free play</div>
   </div>
 </div>

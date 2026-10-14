@@ -73,6 +73,13 @@
   .news { margin-top: 10px; font-size: 14px; line-height: 1.35; }
   .news b { color: #000; background: var(--accent); font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-right: 6px; letter-spacing: 1px; }
   .news.flash { animation: flash 1.2s ease-out; }
+  .whybtn { width: 100%; margin-top: 10px; background: #1c2330; color: var(--text); font-size: 14px; padding: 11px; }
+  .why { margin-top: 10px; background: #1b1a10; border: 1px solid #5a4b12; border-radius: 12px; padding: 12px; font-size: 14px; line-height: 1.4; animation: tin .3s ease-out; }
+  .why b { color: var(--accent); }
+  .why .drv { display: flex; justify-content: space-between; color: var(--dim); font-size: 13px; margin-top: 4px; }
+  li.sec { background: #2a0d12; margin: 0 -8px; padding: 9px 8px !important; border-radius: 8px; border-left: 3px solid var(--down); }
+  #badge.bad { background: linear-gradient(135deg, #ff4d5e, #8a1020); color: #fff; box-shadow: 0 10px 40px rgba(255,60,80,.45); }
+  #over .recap { font-style: italic; color: #cfd6e2; max-width: 420px; margin: 4px 0 8px; line-height: 1.4; }
   @keyframes flash { 0% { background: rgba(255,210,63,.35); } 100% { background: transparent; } }
 
   /* trade ticket */
@@ -209,6 +216,8 @@
         <div id="osc" class="hidden"></div>
         <div class="legend" id="legend"></div>
         <div class="news" id="news"><b>NEWS</b><span id="news-text">Waiting for breaking news…</span></div>
+        <div class="why hidden" id="why"></div>
+        <button class="whybtn" id="whybtn">🔍 Why is it moving?</button>
       </div>
       <div class="card">
         <div class="qty" id="qty">
@@ -297,6 +306,7 @@
   <h2>🏁 Round over</h2>
   <div class="place" id="over-place">#1</div>
   <div id="over-sub" style="color:var(--dim)"></div>
+  <div class="recap" id="over-recap"></div>
   <ol id="over-list"></ol>
   <div style="color:var(--dim);margin-top:10px">Waiting for the next round on the TV…</div>
 </div>
@@ -321,7 +331,8 @@
     <p style="margin-top:12px;color:var(--accent)">"Doge Burger adds a $1,000 golden burger"</p></div>
   <div class="slide"><div class="big">🧠</div><h2>The trick</h2>
     <p><b>Buy</b>, leak good news, <b>sell</b> into the spike.<br>Or <b>dump</b>, leak a scandal, <b>buy back</b> after the crash.</p>
-    <p style="margin-top:12px">$MEME is the wildest. The AIs overreact, then calm down. Time it right.</p></div>
+    <p style="margin-top:12px">$MEME is the wildest. The AIs overreact, then calm down. Time it right.</p>
+    <p style="margin-top:12px;color:var(--down)"><b style="color:var(--down)">👮 But careful:</b> an AI SEC watches for insider trading. Get caught and you're fined.</p></div>
   <div class="slide"><div class="big">📊</div><h2>Pro tools</h2>
     <p>Tap <b>⚙ Indicators</b> on the chart for moving averages, Bollinger Bands, VWAP, RSI and MACD. Your buys and sells are marked on the chart.</p></div>
   <div class="slide"><div class="big">🏆</div><h2>Beat the bots</h2>
@@ -703,7 +714,7 @@
   var leaks = [];
   function leak(text, ticker) {
     if (!text.trim()) return toast("Write a headline first");
-    post("/api/news", { text: text, author: me.name, source: source, ticker: ticker || null })
+    post("/api/news", { text: text, author: me.name, source: source, ticker: ticker || null, player_id: me.id })
       .then(function (n) {
         $("headline").value = ""; source = "crowd";
         buzz([20, 40, 20]);
@@ -799,6 +810,38 @@
     queue = queue.filter(function (f) { return f.human || Date.now() / 1000 - f.ts < 12; });
   }, 1300);
 
+  // ---------------------------------------------------------------- forensics & the AI SEC
+  var whyT = null;
+  function showWhy(d) {
+    if (d.ticker !== sel) return;
+    var el = $("why");
+    el.innerHTML = "<b>🔍 $" + esc(d.ticker) + " " + sign(d.move_pct, 1) + "% in " + d.window + "s</b><br>" + esc(d.summary) +
+      d.drivers.slice(0, 3).map(function (x) {
+        return "<div class='drv'><span>" + esc(x.emoji) + " " + esc(x.label) + "</span><span class='" + (x.net_usd >= 0 ? "up" : "down") + "'>" +
+          (x.net_usd >= 0 ? "bought " : "sold ") + "$" + fmt(Math.abs(x.net_usd) / 1000, 0) + "k</span></div>";
+      }).join("");
+    el.classList.remove("hidden");
+    clearTimeout(whyT); whyT = setTimeout(function () { el.classList.add("hidden"); }, 25000);
+  }
+  $("whybtn").onclick = function () {
+    $("whybtn").textContent = "🔍 Investigating…";
+    fetch("/api/explain/" + sel).then(function (r) { return r.json(); }).then(showWhy)
+      .catch(function () { toast("Couldn't explain that one"); })
+      .then(function () { $("whybtn").textContent = "🔍 Why is it moving?"; });
+  };
+  function showSec(c) {
+    var li = document.createElement("li");
+    li.className = "sec"; li.setAttribute("data-t", c.ticker);
+    li.innerHTML = '<span class="who">👮 @AI_SEC</span><span class="act down">FINE $' + fmt(c.fine, 0) + '</span><span class="tkr">$' + esc(c.ticker) + "</span><br>" + esc(c.text);
+    $("feed").insertBefore(li, $("feed").firstChild);
+    if (me && c.pid === me.id) {
+      var el = $("badge"); el.textContent = "🚨 BUSTED! The AI SEC fined you $" + fmt(c.fine, 0) + " for insider trading on $" + c.ticker;
+      el.classList.add("show", "bad"); buzz([200, 100, 200, 100, 400]);
+      clearTimeout(el._t); el._t = setTimeout(function () { el.classList.remove("show", "bad"); }, 6000);
+      refresh();
+    } else toast("👮 The AI SEC fined " + c.player + " $" + fmt(c.fine, 0) + " for insider trading");
+  }
+
   // ---------------------------------------------------------------- boards
   var bestAI = null;
   function renderBoards(s) {
@@ -819,7 +862,7 @@
   function unlock(key, text) {
     if (got[key]) return;
     got[key] = true;
-    var el = $("badge"); el.textContent = text; el.classList.add("show"); buzz([40, 60, 40]);
+    var el = $("badge"); el.textContent = text; el.classList.remove("bad"); el.classList.add("show"); buzz([40, 60, 40]);
     clearTimeout(el._t); el._t = setTimeout(function () { el.classList.remove("show"); }, 3200);
   }
   function checkAchievements() {
@@ -855,6 +898,7 @@
     $("over-list").innerHTML = d.players.slice(0, 6).map(function (p, k) {
       return "<li><span>" + (["🥇", "🥈", "🥉"][k] || "#" + (k + 1)) + " " + esc(p.name) + "</span><span class='" + (p.pnl_pct >= 0 ? "up" : "down") + "'>" + sign(p.pnl_pct, 1) + "%</span></li>";
     }).join("");
+    $("over-recap").textContent = d.recap ? "🎙️ " + d.recap : "";
     $("over").classList.remove("hidden");
     buzz([80, 80, 80]);
   }
@@ -886,6 +930,8 @@
       else if (m.type === "candle") pushCandle(m.ticker, m.candle, false);
       else if (m.type === "news") showNews(m.item, true);
       else if (m.type === "round_over") roundOver(m.data);
+      else if (m.type === "explain") showWhy(m.item);
+      else if (m.type === "sec") showSec(m.item);
       else if (m.type === "feed" && m.item.action !== "hold" && m.item.qty > 0 && (m.item.thought || m.item.human)) {
         queue.push(m.item);
         if (queue.length > 40) { queue.sort(function (a, b) { return interest(b) - interest(a); }); queue.length = 40; }

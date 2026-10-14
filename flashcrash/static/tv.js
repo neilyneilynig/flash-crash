@@ -178,7 +178,8 @@
       var cls = "tk" + (m.ticker === focus ? " on" : "") + (Date.now() - (hot[m.ticker] || 0) < 3000 ? " hot" : "");
       return '<div class="' + cls + '"><b>$' + esc(m.ticker) + '</b><span class="px">' + fmt(m.price, 2) + '</span>' +
         '<span class="co">' + esc(m.company) + '</span><span class="ch ' + (m.change_pct >= 0 ? "up" : "down") + '">' +
-        sign(m.change_pct, 2) + "%</span></div>";
+        sign(m.change_pct, 2) + '%</span><span class="bar" title="AI buying vs selling, last 30s"><i style="width:' +
+        Math.round((m.buy_pressure == null ? 0.5 : m.buy_pressure) * 100) + '%"></i></span></div>';
     }).join("");
   }
   function renderStats() {
@@ -237,6 +238,40 @@
     renderStats();
   }
 
+  // --- forensics: why did it move? --------------------------------------------
+  var whyTimer = null;
+  function showWhy(d) {
+    if (Date.now() > manualUntil) setFocusStock(d.ticker, false);
+    $("why-move").textContent = "$" + d.ticker + " " + sign(d.move_pct, 1) + "%";
+    $("why-move").className = d.move_pct >= 0 ? "up" : "down";
+    $("why-text").textContent = d.summary;
+    var max = Math.max.apply(null, d.drivers.map(function (x) { return Math.abs(x.net_usd); }).concat([1]));
+    $("why-bars").innerHTML = d.drivers.slice(0, 4).map(function (x) {
+      var w = Math.max(4, Math.round(Math.abs(x.net_usd) / max * 300));
+      return '<div><span class="nm">' + esc(x.emoji) + " " + esc(x.label) + '</span><span class="b" style="width:' + w + "px;background:" +
+        (x.net_usd >= 0 ? "var(--up)" : "var(--down)") + '"></span><span class="v">' + (x.net_usd >= 0 ? "bought " : "sold ") + "$" +
+        fmt(Math.abs(x.net_usd) / 1000, 0) + "k</span></div>";
+    }).join("");
+    $("why").classList.remove("hidden");
+    clearTimeout(whyTimer);
+    whyTimer = setTimeout(function () { $("why").classList.add("hidden"); }, 12000);
+  }
+
+  // --- the AI SEC -----------------------------------------------------------------
+  var secTimer = null;
+  function showSec(c) {
+    $("sec-title").textContent = c.player + " fined $" + fmt(c.fine, 0);
+    $("sec-text").textContent = c.text;
+    $("sec").classList.remove("hidden");
+    clearTimeout(secTimer);
+    secTimer = setTimeout(function () { $("sec").classList.add("hidden"); }, 7000);
+    var li = document.createElement("li");
+    li.className = "sec";
+    li.innerHTML = '<span class="who">👮 @AI_SEC</span><span class="act down">FINE $' + fmt(c.fine, 0) + '</span><span class="tkr">$' +
+      esc(c.ticker) + "</span><br>" + esc(c.text);
+    $("feed").insertBefore(li, $("feed").firstChild);
+  }
+
   function roundOver(d) {
     var medals = ["🥇", "🥈", "🥉"];
     var list = d.players.slice(0, 5).map(function (p, i) {
@@ -249,6 +284,7 @@
     var humanBest = d.players.length ? d.players[0].pnl_pct : null;
     $("pod-ai").textContent = ai ? "Best AI: " + ai.emoji + " " + ai.label + " " + sign(ai.pnl_pct, 1) + "%" +
       (humanBest != null ? (humanBest > ai.pnl_pct ? " · Humans beat the bots! 🎉" : " · The bots win this time 🤖") : "") : "";
+    $("pod-recap").textContent = d.recap ? "🎙️ " + d.recap : "";
     $("podium").classList.remove("hidden");
   }
 
@@ -263,6 +299,8 @@
       else if (m.type === "feed") queueFeed(m.item);
       else if (m.type === "news") showNews(m.item, true);
       else if (m.type === "round_over") roundOver(m.data);
+      else if (m.type === "explain") showWhy(m.item);
+      else if (m.type === "sec") showSec(m.item);
     };
     ws.onclose = function () { setTimeout(connect, 1500); };
   }
@@ -319,5 +357,6 @@
     } else if (k === "MediaPlayPause" || c === 179 || c === 85) post("/api/control", { action: "toggle_pause" });
     else if (k === "MediaFastForward" || c === 228 || c === 90) post("/api/news/chaos", { ticker: focus });
     else if (k === "MediaRewind" || c === 227 || c === 89) post("/api/control", { action: "start_round", minutes: 5 });
+    else if (k === "d" || k === "D") post("/api/control", { action: "demo" }); // scripted 3-minute show for recordings
   });
 })();

@@ -159,3 +159,47 @@ def test_round_ends_and_blocks_trading():
 
     events = asyncio.run(run())
     assert "round_over" in events
+
+
+def test_ai_sec_fines_insider_trading():
+    async def run():
+        sim = Simulation(MockBrain(random.Random(3)), n_agents=60, workers=12, seed=3)
+        sim.sec_delay, sim.sec_catch = 3.0, 1.0
+        events = []
+
+        async def listen(e):
+            if e["type"] == "sec":
+                events.append(e["item"])
+        sim.listeners.append(listen)
+        sim.start()
+        crook, honest = sim.join("Crook"), sim.join("Honest")
+        await sim.human_trade(crook.id, "buy", "all", "MEME")  # buy, then pump it
+        await sim.add_news("Doge Burger smashes earnings, record profit", "crowd", "Crook", None, crook.id)
+        await sim.add_news("Doge Burger wins giant mega contract", "crowd", "Honest", None, honest.id)  # no trade first
+        await asyncio.sleep(4)
+        await sim.stop()
+        return sim, events, crook
+
+    sim, events, crook = asyncio.run(run())
+    if sim.world.markets["MEME"].change_pct > 0.5:  # the pump worked, so the SEC must rule
+        assert [e["player"] for e in events] == ["Crook"]
+        assert events[0]["fine"] >= 250 and sim.world.sec_cases
+    assert all(e["player"] != "Honest" for e in events)
+
+
+def test_forensics_names_the_headline_and_drivers():
+    async def run():
+        sim = Simulation(MockBrain(random.Random(4)), n_agents=120, workers=16, seed=4)
+        sim.start()
+        await sim.add_news("RoboRide robotaxi drives itself into a lake, recall feared", "crowd", "t")
+        await asyncio.sleep(5)
+        d = await sim.explain("ROBO", 30)
+        res = sim.results()
+        recap = await sim.recap(res)
+        await sim.stop()
+        return d, recap
+
+    d, recap = asyncio.run(run())
+    assert d["ticker"] == "ROBO" and "lake" in d["headline"]
+    assert d["drivers"] and d["summary"].startswith("$ROBO")
+    assert "$" in recap

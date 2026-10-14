@@ -241,6 +241,16 @@ class LLMBrain:
         text, _, _ = await self.complete(msgs, max_tokens=60)
         return _THINK.sub("", text).strip().strip('"').splitlines()[0][:140]
 
+    async def narrate(self, system: str, user: str, fallback: str, max_tokens: int = 140) -> str:
+        """Short commentary (SEC verdicts, move forensics, round recaps). Never fails: falls back to the template."""
+        try:
+            text, _, _ = await self.complete([{"role": "system", "content": system}, {"role": "user", "content": user}],
+                                             max_tokens=max_tokens)
+        except Exception:
+            return fallback
+        text = " ".join(_THINK.sub("", text).strip().strip('"').split())
+        return text[:420] or fallback
+
 
 # ----------------------------------------------------------------------------------------
 # Mock brain: deterministic-ish persona rules so the whole game runs offline.
@@ -307,6 +317,9 @@ class MockBrain:
             off = r.uniform(-0.004, 0.006) * (1 if side == "buy" else -1)
             price = round(ctx["price"] * (1 + off), 2)
         return Decision(side, qty, price, self.chatter.post(agent, side, ctx, sentiment), "mock")
+
+    async def narrate(self, system: str, user: str, fallback: str, max_tokens: int = 140) -> str:
+        return fallback
 
     async def write_headline(self, ctx: dict) -> str:
         pool = MOCK_HEADLINES.get(ctx["ticker"], []) + GENERIC_HEADLINES

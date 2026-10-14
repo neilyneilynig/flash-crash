@@ -43,6 +43,7 @@ def build_mcp(sim: Simulation) -> MCPServer:
             "players": [f"{p['name']} {p['pnl_pct']:+.1f}%" for p in s["players"][:5]],
             "round_seconds_left": s["round_left"],
             "latest_headline": news,
+            "sec_fines": [c["text"] for c in sim.world.sec_cases[-2:]],
             "summary": f"${best['ticker']} is the top mover at {best['change_pct']:+.1f}%, "
                        f"${worst['ticker']} the worst at {worst['change_pct']:+.1f}%. "
                        + (f"{top[0]['label']}s are winning." if top else ""),
@@ -56,6 +57,15 @@ def build_mcp(sim: Simulation) -> MCPServer:
         item = await sim.add_news(headline, "alexa", author, ticker)
         return {"ok": True, "headline": item.text, "stocks": item.tickers, "prices_at_leak": item.prices,
                 "message": "Headline is live. Watch the traders react on the TV."}
+
+    @mcp.tool(title="Why did it move?")
+    async def explain_move(ticker: str = "GPU") -> dict:
+        """Market forensics: explain why a stock moved in the last 30 seconds: the headline that triggered it and
+        which AI trader types (degens, whales, panic sellers...) drove the buying or selling. ticker: GPU, ROBO, NOVA or MEME."""
+        d = await sim.explain(ticker, 30.0)
+        return {"ticker": d["ticker"], "move_pct": d["move_pct"], "headline": d["headline"],
+                "drivers": [f"{x['label']} {'bought' if x['net_usd'] > 0 else 'sold'} ${abs(x['net_usd']):,.0f}" for x in d["drivers"][:3]],
+                "summary": d["summary"]}
 
     @mcp.tool(title="Chaos headline")
     async def chaos(ticker: str | None = None) -> dict:
@@ -80,8 +90,8 @@ def build_mcp(sim: Simulation) -> MCPServer:
 
     @mcp.tool(title="Control game")
     async def control(action: str, minutes: float = 5) -> dict:
-        """Control the game: 'start_round' (timed round, default 5 minutes, fresh bankrolls), 'pause', 'resume',
-        'reset' (new free-play market), 'autopilot_on' or 'autopilot_off' (AI news every ~40s)."""
+        """Control the game: 'start_round' (timed round, default 5 minutes, fresh bankrolls), 'demo' (3-minute scripted
+        show), 'pause', 'resume', 'reset' (new free-play market), 'autopilot_on' or 'autopilot_off' (AI news every ~40s)."""
         if action == "pause":
             sim.paused = True
         elif action == "resume":
@@ -90,6 +100,8 @@ def build_mcp(sim: Simulation) -> MCPServer:
                 sim.round_minutes = 0
         elif action == "start_round":
             await sim.start_round(min(30.0, max(1.0, minutes)))
+        elif action == "demo":
+            await sim.demo()
         elif action == "reset":
             sim.reset()
         elif action in ("autopilot_on", "autopilot_off"):

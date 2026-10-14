@@ -16,7 +16,11 @@ conspiracy theorists and hedge-fund whales:
 The market plays out on the **Fire TV**. Everyone in the room scans a QR code and trades against the AIs from their phone,
 or **leaks fake breaking news** ("Doge Burger adds a $1,000 golden burger") by typing or speaking it. The headline is routed
 to the company it names, every agent that's watching reads it, argues about it on its timeline, and trades. Bubbles, panics
-and flash crashes emerge on their own. Play free-form or in **timed 5-minute rounds** that end on a podium.
+and flash crashes emerge on their own. Play free-form or in **timed 5-minute rounds** that end on a podium with an AI sportscaster recap.
+
+But careful: an **AI SEC** watches for insider trading. Buy a stock, leak good news about it and profit, and you may get
+busted on the big screen. And whenever a stock rips or crashes, an **AI forensics analyst** explains why: the headline and
+which trader personalities drove it, with dollar flows.
 **Alexa+** (or any AI agent) can join in over **MCP**: *"Alexa, leak that RoboRide just got approved in every city."*
 
 ![TV dashboard](docs/tv.png)
@@ -51,6 +55,16 @@ and flash crashes emerge on their own. Play free-form or in **timed 5-minute rou
   "fusion", "chips") find the right one; otherwise it's macro news ("Fed cuts rates") and moves everything a little.
 * **Science panel**: the footer tracks *stylized facts* of real markets as they emerge: fat tails (excess kurtosis),
   volatility clustering, drawdown and a herding index.
+
+### Five AI roles
+
+| Role | What it does |
+|---|---|
+| 300 traders | personas deciding trades and posting on the timeline |
+| Newsroom | invents chaos headlines on demand or on autopilot |
+| AI SEC | rules on insider trading: did you trade right before your own leak, and did it pay? |
+| Forensics analyst | explains every big move from the order flow by trader type |
+| Sportscaster | recaps each round on the podium |
 
 ## Quick start
 
@@ -114,11 +128,18 @@ The server exposes an MCP endpoint (spec 2025-11-25+, **Streamable HTTP**) at `/
 | `market_status` | every stock's price and move, who's winning, round clock, latest headline |
 | `leak_news` | inject a headline (optionally aimed at a ticker) that every agent reacts to |
 | `chaos` | ask the AI newsroom for a surprise headline |
+| `explain_move` | "why did MEME crash?": the headline and trader types behind the last move |
 | `trade` | buy or sell a stock for a named human player |
-| `control` | start a timed round / pause / resume / reset / autopilot news |
+| `control` | start a timed round / run the scripted demo / pause / resume / reset / autopilot news |
 
 Connect any MCP client to `http://<host>:8000/mcp`. DNS-rebinding protection only accepts requests addressed to localhost,
 the LAN IP, `PUBLIC_URL` or `MCP_ALLOWED_HOSTS`.
+
+## Demo mode
+
+`control` → `demo` (from Alexa, `POST /api/control {"action":"demo"}`, or **D** on a keyboard on the TV page) starts a
+3-minute round with a scripted news timeline, so every take of a recording hits the same beats. See
+[docs/SUBMISSION.md](docs/SUBMISSION.md) for the video script and the hackathon write-ups.
 
 ## Deploy
 

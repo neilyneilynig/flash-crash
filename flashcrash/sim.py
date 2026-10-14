@@ -29,6 +29,18 @@ HUMAN = Archetype("human", "Humans", "🧑", "A human player.", 0, 0, (10_000, 1
 HUMAN_CASH = 10_000
 HUMAN_STAKE = 2_000  # starting dollars of each stock, so players can sell from the first second
 PLAYER_TIMEOUT = 60  # seconds without a phone check-in before a player is dropped at the next reset
+SEC_LOOKBACK = 45  # trades this long before your own leak count as suspicious
+ALARM_MOVE = 0.04  # a 4% move within ~12s triggers the forensics desk
+
+# A scripted 3-minute show for demos and the submission video: (seconds in, headline or None for AI chaos)
+DEMO_SCRIPT = [
+    (6, "Doge Burger adds a $1,000 golden burger to the menu, sells out in an hour"),
+    (34, "RoboRide robotaxi drives itself into a lake on live TV"),
+    (62, None),
+    (88, "Fed announces surprise emergency rate cut"),
+    (116, "Regulators open fraud probe into Doge Burger"),
+    (146, "Nova Fusion reactor hits net energy gain, physicists celebrate"),
+]
 
 
 @dataclass
@@ -116,6 +128,8 @@ class World:
     started: float = field(default_factory=time.time)
     fills: dict[str, list[dict]] = field(default_factory=dict)  # player id -> their trades, for chart markers
     cost: dict[str, dict[str, float]] = field(default_factory=dict)  # player id -> ticker -> cost basis held
+    sec_cases: list[dict] = field(default_factory=list)  # insider-trading fines this round
+    moves: list[dict] = field(default_factory=list)  # big moves the forensics desk explained
 
 
 _WORD = re.compile(r"[a-z$][a-z0-9$\-]*")
@@ -150,7 +164,11 @@ class Simulation:
         self.round_minutes = 0.0
         self._ids = itertools.count(1)
         self._tasks: list[asyncio.Task] = []
+        self._bg: set[asyncio.Task] = set()
         self.listeners: list = []  # async callbacks for push events
+        self.sec_delay = 25.0  # seconds the AI SEC watches a leak before ruling
+        self.sec_catch = 0.7  # chance a profitable insider trade gets caught
+        self._explained: dict[str, float] = {}
         self.world = self._new_world()
 
     # --- setup ------------------------------------------------------------
@@ -208,9 +226,15 @@ class Simulation:
                         loop.create_task(self._autopilot_loop()), loop.create_task(self._round_loop())]
 
     async def stop(self) -> None:
-        for t in self._tasks:
+        tasks = self._tasks + list(self._bg)
+        for t in tasks:
             t.cancel()
-        await asyncio.gather(*self._tasks, return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _spawn(self, coro) -> None:
+        t = asyncio.get_running_loop().create_task(coro)
+        self._bg.add(t)
+        t.add_done_callback(self._bg.discard)
 
     @property
     def round_over(self) -> bool:
@@ -254,6 +278,10 @@ class Simulation:
                 m.current = Candle(t, p, p, p, p)
                 m.exchange.expire(now - ORDER_TTL)
                 await self._emit({"type": "candle", "ticker": tk, "candle": done.as_dict()})
+                closes = m.closes(6)
+                if abs(closes[-1] / closes[0] - 1) >= ALARM_MOVE and now - self._explained.get(tk, 0) > 30:
+                    self._explained[tk] = now
+                    self._spawn(self._forensics(tk))
 
     async def _mm_loop(self) -> None:
         while True:
@@ -291,12 +319,68 @@ class Simulation:
             if self.round_end and time.time() >= self.round_end:
                 self.round_end = None
                 self.paused = True
-                await self._emit({"type": "round_over", "data": self.results()})
+                res = self.results()
+                try:
+                    res["recap"] = await asyncio.wait_for(self.recap(res), 12)
+                except Exception:
+                    res["recap"] = self._recap_template(res)
+                await self._emit({"type": "round_over", "data": res})
 
     def results(self) -> dict:
         board = self.leaderboard()
         return {"players": self.players_board(), "best_ai": next((r for r in board if r["key"] != "human"), None),
-                "leaderboard": board, "markets": self.markets_summary()}
+                "leaderboard": board, "markets": self.markets_summary(), "sec_cases": self.world.sec_cases}
+
+    def _recap_template(self, res: dict) -> str:
+        mk = max(res["markets"], key=lambda m: abs(m["change_pct"]))
+        parts = [f"${mk['ticker']} was the story of the round at {mk['change_pct']:+.1f}%."]
+        if res["players"]:
+            w = res["players"][0]
+            parts.insert(0, f"{w['name']} takes the crown at {w['pnl_pct']:+.1f}%!")
+        if res["best_ai"]:
+            parts.append(f"Best of the bots: the {res['best_ai']['label']}s at {res['best_ai']['pnl_pct']:+.1f}%.")
+        if res["sec_cases"]:
+            c = res["sec_cases"][-1]
+            parts.append(f"And the AI SEC fined {c['player']} ${c['fine']:,.0f} for insider trading.")
+        return " ".join(parts)
+
+    async def recap(self, res: dict) -> str:
+        """An AI sportscaster sums up the round from what actually happened."""
+        facts = {
+            "players": [f"{p['name']} {p['pnl_pct']:+.1f}%" for p in res["players"][:5]],
+            "best_ai_type": f"{res['best_ai']['label']} {res['best_ai']['pnl_pct']:+.1f}%" if res["best_ai"] else None,
+            "stocks": [f"${m['ticker']} {m['change_pct']:+.1f}%" for m in res["markets"]],
+            "headlines": [n.text for n in self.world.news[-6:]],
+            "big_moves": [mv["summary"] for mv in self.world.moves[-3:]],
+            "sec_fines": [f"{c['player']} fined ${c['fine']:,.0f} on ${c['ticker']}" for c in res["sec_cases"]],
+        }
+        return await self.brain.narrate(
+            "You are a hyped sports commentator closing out a round of a stock-market party game where humans "
+            "trade against hundreds of AI traders. In 2-3 punchy sentences, recap the round: crown the winner, name the "
+            "wildest stock move and the headline behind it, and roast someone. Only use the facts given.",
+            str(facts), self._recap_template(res), max_tokens=160)
+
+    async def demo(self) -> None:
+        """Start a 3-minute round that plays a scripted news timeline (handy for recording a demo)."""
+        await self.start_round(3)
+        self.autopilot = False
+        gen = self.gen
+
+        async def run():
+            t0 = time.time()
+            for at, text in DEMO_SCRIPT:
+                await asyncio.sleep(max(0.0, t0 + at - time.time()))
+                if self.gen != gen:
+                    return
+                if text:
+                    await self.add_news(text, "newsroom", "Demo")
+                else:
+                    try:
+                        await self.newsroom()
+                    except Exception:
+                        pass
+
+        self._spawn(run())
 
     # --- agents -----------------------------------------------------------
     def _pick_agent(self) -> Agent | None:
@@ -397,7 +481,8 @@ class Simulation:
         return item
 
     # --- news -------------------------------------------------------------
-    async def add_news(self, text: str, source: str = "crowd", author: str = "anon", ticker: str | None = None) -> NewsItem:
+    async def add_news(self, text: str, source: str = "crowd", author: str = "anon", ticker: str | None = None,
+                       player_id: str | None = None) -> NewsItem:
         text = " ".join(text.split())[:160]
         tickers = route_news(text, ticker)
         mood = sentiment(text)
@@ -409,7 +494,122 @@ class Simulation:
         self.world.news.append(item)
         del self.world.news[:-50]
         await self._emit({"type": "news", "item": item.as_dict()})
+        if player_id and player_id in self.world.agents and mood:
+            self._spawn(self._sec_watch(player_id, item, mood))
         return item
+
+    # --- the AI SEC ---------------------------------------------------------
+    async def _sec_watch(self, pid: str, news: NewsItem, mood: float) -> None:
+        """Trading a stock right before leaking news about it is insider trading. The AI SEC watches,
+        and if the trick paid off it may fine you: the profit plus a penalty."""
+        want = "buy" if mood > 0 else "sell"
+        suspect = [f for f in self.world.fills.get(pid, []) if f["ticker"] in news.tickers and f["side"] == want
+                   and news.ts - SEC_LOOKBACK <= f.get("ts", 0) <= news.ts]
+        if not suspect:
+            return
+        gen = self.gen
+        await asyncio.sleep(self.sec_delay)
+        w = self.world
+        if gen != self.gen or pid not in w.agents:
+            return
+        sgn = 1 if want == "buy" else -1
+        profit = sum(f["qty"] * (w.markets[f["ticker"]].price - f["price"]) * sgn for f in suspect)
+        if profit <= 0 or self.rng.random() > self.sec_catch:
+            return
+        name, tk = w.agents[pid].name, suspect[0]["ticker"]
+        fine = round(max(250.0, profit * 1.5), 2)
+        wallet = w.wallets[pid]
+        from_cash = min(fine, max(0.0, wallet.cash - wallet.reserved_cash))
+        wallet.cash -= from_cash
+        if fine - from_cash > 0.01:  # not enough cash: the rest is paid in seized shares
+            m = w.markets[tk]
+            acct, mm = m.exchange.accounts[pid], m.exchange.accounts[MM_ID]
+            seized = min(acct.free_shares, math.ceil((fine - from_cash) / m.price))
+            if acct.shares:  # what's left keeps its average cost
+                cost = w.cost.setdefault(pid, {})
+                cost[tk] = cost.get(tk, 0.0) * (acct.shares - seized) / acct.shares
+            acct.shares -= seized
+            mm.shares += seized
+            fine = round(from_cash + seized * m.price, 2)
+        if fine <= 0:
+            return
+        verb = "bought" if want == "buy" else "dumped"
+        fallback = (f"{name} {verb} ${tk} seconds before leaking \"{news.text}\". The AI SEC is not amused: "
+                    f"${fine:,.0f} fine for insider trading.")
+        text = await self.brain.narrate(
+            "You are the AI SEC, a dry, sarcastic financial regulator in a party game. In ONE sentence (max 30 words), "
+            "announce an insider-trading fine. Mention the player's name, the stock, the leaked headline and the fine.",
+            f"Player {name} {verb} {sum(f['qty'] for f in suspect)} ${tk} right before leaking '{news.text}', "
+            f"made ${profit:,.0f}. Fine: ${fine:,.0f}.", fallback, max_tokens=80)
+        case = {"pid": pid, "player": name, "ticker": tk, "fine": fine, "profit": round(profit, 2),
+                "headline": news.text, "text": text, "ts": time.time()}
+        w.sec_cases.append(case)
+        await self._emit({"type": "sec", "item": case})
+
+    # --- forensics: why did it move? ----------------------------------------
+    def explain_data(self, ticker: str, window: float = 30.0) -> dict:
+        """Who moved the price: net dollar flow by trader type and the headline that set it off."""
+        m = self.market(ticker)
+        tk = m.stock.ticker
+        now = time.time()
+        recent = [c for c in m.candles if c.time >= now - window]
+        start = recent[0].open if recent else m.current.open
+        move = (m.price / start - 1) * 100 if start else 0.0
+        flows: dict[str, float] = {}
+        posts = []
+        for f in self.world.feed:
+            if f.ticker == tk and f.ts >= now - window and f.filled and f.fill_price:
+                usd = f.filled * f.fill_price * (1 if f.action == "buy" else -1)
+                flows[f.archetype] = flows.get(f.archetype, 0.0) + usd
+                if (usd > 0) == (move > 0) and f.thought and not f.human:
+                    posts.append((abs(usd), f))
+        meta = {a.key: a for a in ARCHETYPES} | {"human": HUMAN}
+        drivers = sorted(({"key": k, "label": meta[k].label, "emoji": meta[k].emoji, "net_usd": round(v)}
+                          for k, v in flows.items() if k in meta), key=lambda d: -abs(d["net_usd"]))[:5]
+        news = [n for n in self.world.news if tk in n.tickers and n.ts >= now - window - 45]
+        posts.sort(key=lambda x: -x[0])
+        return {"ticker": tk, "company": m.stock.company, "move_pct": round(move, 2), "window": int(window),
+                "price": round(m.price, 2), "headline": news[-1].text if news else None, "drivers": drivers,
+                "quotes": [{"handle": f.handle, "emoji": f.emoji, "text": f.thought} for _, f in posts[:2]], "ts": now}
+
+    @staticmethod
+    def _explain_template(d: dict) -> str:
+        up = d["move_pct"] >= 0
+        big = abs(d["move_pct"]) >= 3
+        word = ("ripped" if big else "climbed") if up else ("crashed" if big else "slipped")
+        buyers = [x for x in d["drivers"] if x["net_usd"] > 0]
+        sellers = [x for x in d["drivers"] if x["net_usd"] < 0]
+        lead, fade = (buyers, sellers) if up else (sellers, buyers)
+
+        def names(xs):
+            return " and ".join(f"{x['emoji']} {x['label']}s (${abs(x['net_usd']) / 1000:,.0f}k)" for x in xs[:2])
+
+        out = f"${d['ticker']} {word} {d['move_pct']:+.1f}% in {d['window']}s."
+        if d["headline"]:
+            out += f" Trigger: \"{d['headline']}\"."
+        elif not lead:
+            out += " No headline: pure herd behaviour."
+        if lead:
+            out += f" Led by {names(lead)} {'buying' if up else 'selling'}."
+        if fade:
+            out += f" {names(fade)} took the other side."
+        return out
+
+    async def explain(self, ticker: str, window: float = 30.0) -> dict:
+        d = self.explain_data(ticker, window)
+        d["summary"] = await self.brain.narrate(
+            "You are a market-forensics analyst on a live TV show about a stock market run by AI traders. In 2 short "
+            "sentences (max 40 words), explain why the stock moved: the headline that triggered it and which trader "
+            "types drove it. Be vivid but stick to the data.",
+            str({k: d[k] for k in ("ticker", "company", "move_pct", "window", "headline", "drivers", "quotes")}),
+            self._explain_template(d), max_tokens=100)
+        return d
+
+    async def _forensics(self, ticker: str) -> None:
+        d = await self.explain(ticker, 20.0)
+        self.world.moves.append(d)
+        del self.world.moves[:-20]
+        await self._emit({"type": "explain", "item": d})
 
     async def newsroom(self, ticker: str | None = None) -> NewsItem:
         m = self.world.markets.get(ticker or "") or self.rng.choice(list(self.world.markets.values()))
@@ -456,7 +656,7 @@ class Simulation:
             elif held:  # selling keeps the average cost of what's left
                 cost[tk] = cost.get(tk, 0.0) * (held - item.filled) / held
             w.fills.setdefault(pid, []).append({"ticker": tk, "time": m.current.time, "side": side,
-                                                "qty": item.filled, "price": item.fill_price})
+                                                "qty": item.filled, "price": item.fill_price, "ts": time.time()})
             del w.fills[pid][:-100]
         return item
 
@@ -526,9 +726,25 @@ class Simulation:
             "herding": round(herd, 2),
         }
 
+    def pressure(self, window: float = 30.0) -> dict[str, float]:
+        """Share of AI dollar flow that is buying, per stock, over the last few seconds (0.5 = balanced)."""
+        cut = time.time() - window
+        buy: dict[str, float] = {}
+        tot: dict[str, float] = {}
+        for f in reversed(self.world.feed):
+            if f.ts < cut:
+                break
+            if f.filled and f.fill_price:
+                usd = f.filled * f.fill_price
+                tot[f.ticker] = tot.get(f.ticker, 0.0) + usd
+                if f.action == "buy":
+                    buy[f.ticker] = buy.get(f.ticker, 0.0) + usd
+        return {t: round(buy.get(t, 0.0) / tot[t], 2) if tot.get(t) else 0.5 for t in self.world.markets}
+
     def markets_summary(self) -> list[dict]:
+        press = self.pressure()
         return [{"ticker": t, "company": m.stock.company, "blurb": m.stock.blurb, "price": round(m.price, 2),
-                 "open": m.open_price, "change_pct": round(m.change_pct, 2), "volume": m.volume}
+                 "open": m.open_price, "change_pct": round(m.change_pct, 2), "volume": m.volume, "buy_pressure": press[t]}
                 for t, m in self.world.markets.items()]
 
     def snapshot(self) -> dict:
