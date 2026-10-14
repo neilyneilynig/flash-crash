@@ -34,6 +34,9 @@ and to use LLM agents for what they're actually great at: playing hundreds of di
   and bubbles, panics and flash crashes emerge on their own.
 * **The AI SEC** watches for insider trading. Buy a stock, then leak good news about it, and if it pays off you may get
   busted on the big screen and fined your profit plus a penalty.
+* **Credibility**: the AIs remember who's been crying wolf. Each leak makes them trust you less (it recovers over time),
+  and they'll call out serial leakers by name.
+* **Circuit breakers** halt a stock that moves 12% in 20 seconds, just like a real exchange.
 * **Market forensics**: whenever a stock rips or crashes, an AI analyst explains *why* on screen: the headline that
   triggered it and which trader personalities drove it, with dollar flows.
 * **Timed rounds** end on a podium with an **AI sportscaster recap** of the round.
@@ -53,6 +56,8 @@ and to use LLM agents for what they're actually great at: playing hundreds of di
   whales on **Nemotron 3 Super** with reasoning. The same code runs on Amazon Bedrock or any OpenAI-compatible endpoint, and
   offline with rule-based persona brains so the game never breaks at a party.
 * **Five AI roles**: traders, the chaos newsroom, the AI SEC, the forensics analyst and the round sportscaster.
+* **Reliability**: the Nemotron path is covered by tests against a fake OpenAI-compatible server, and every AI role
+  falls back to a template if the provider hiccups, so a party never stalls.
 * **Exchange**: a real price-time-priority limit order book per stock with cash/share reservations, no shorting or
   self-trading, one wallet per trader shared across books, and market makers quoting around a slow EMA so noise is absorbed
   but news gets through. Property tests check cash and share conservation across thousands of random orders.

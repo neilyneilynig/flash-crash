@@ -203,3 +203,60 @@ def test_forensics_names_the_headline_and_drivers():
     assert d["ticker"] == "ROBO" and "lake" in d["headline"]
     assert d["drivers"] and d["summary"].startswith("$ROBO")
     assert "$" in recap
+
+
+def test_serial_leakers_lose_credibility():
+    async def run():
+        sim = Simulation(MockBrain(random.Random(5)), n_agents=80, workers=12, seed=5)
+        sim.start()
+        p = sim.join("Spammer")
+        items = [await sim.add_news(f"Doge Burger record profit #{i}", "crowd", "Spammer", None, p.id) for i in range(4)]
+        await asyncio.sleep(3)
+        await sim.stop()
+        return sim, p, items
+
+    sim, p, items = asyncio.run(run())
+    creds = [n.cred for n in items]
+    assert creds[0] == 1.0 and creds == sorted(creds, reverse=True) and creds[-1] < 0.2
+    assert sim.portfolio(p.id)["cred"] < 0.15
+
+
+def test_ais_call_out_serial_leakers():
+    from flashcrash.brain import sentiment
+    from flashcrash.chatter import Chatter
+    from flashcrash.personas import ARCHETYPES, Agent
+
+    agent = Agent("a1", "Ava", "ava", ARCHETYPES[1], {}, 1.0, quirk="")
+    ctx = {"ticker": "MEME", "company": "Doge Burger", "price": 9.0, "change_pct": 12.0, "timeline": [],
+           "news": [{"text": "Doge Burger record profit", "age": 5, "author": "Spammer", "cred": 0.3}]}
+    chat = Chatter(random.Random(0))
+    sells = [chat.post(agent, "sell", ctx, sentiment) for _ in range(30)]
+    buys = [chat.post(agent, "buy", ctx, sentiment) for _ in range(30)]
+    assert sum("Spammer" in p for p in sells) > 10  # sellers scoff at the fake good news
+    assert not any("Spammer" in p for p in buys)  # buyers don't diss the news they're trading on
+
+
+def test_circuit_breaker_halts_a_runaway_stock():
+    from flashcrash.sim import Candle
+
+    async def run():
+        sim = Simulation(MockBrain(random.Random(6)), n_agents=20, workers=2, seed=6)
+        events = []
+
+        async def listen(e):
+            events.append(e)
+        sim.listeners.append(listen)
+        m = sim.world.markets["MEME"]
+        now = int(time.time())
+        m.candles = [Candle(now - 20 + i, 8, 8, 8, 8) for i in range(10)]
+        m.current.close = 9.5  # +19% in 20 seconds
+        await sim._circuit_breaker(m, time.time())
+        p = sim.join("Ann")
+        with pytest.raises(ValueError):
+            await sim.human_trade(p.id, "buy", 10, "MEME")
+        await sim.human_trade(p.id, "buy", 1, "GPU")  # other stocks still trade
+        return sim, events
+
+    sim, events = asyncio.run(run())
+    assert [e["ticker"] for e in events if e["type"] == "halt"] == ["MEME"]
+    assert sim.world.markets["MEME"].halted and not sim.world.markets["MEME"].exchange.orders

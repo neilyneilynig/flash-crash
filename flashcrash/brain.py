@@ -73,7 +73,9 @@ def build_messages(agent: Agent, ctx: dict) -> list[dict]:
     fair = f" You privately think ${tk} is worth about ${ctx['fair'] * BY_TICKER[tk].price:.2f}." if a.value > 0 else ""
     system = SYSTEM.format(name=agent.name, handle=agent.handle, listing=LISTING, persona=a.description + fair,
                            quirk=agent.quirk or "plain", ticker=tk)
-    news = "\n".join(f"- [{n['age']}s ago] {n['text']}" for n in ctx["news"]) or "- (nothing new)"
+    news = "\n".join(f"- [{n['age']}s ago] {n['text']}" + (f" (leaked by {n['author']}, who keeps leaking news; "
+                      f"credibility {n['cred']:.0%})" if n.get("cred", 1) < 0.8 else "")
+                      for n in ctx["news"]) or "- (nothing new)"
     timeline = "\n".join(f"- @{p['handle']} on ${p['ticker']}: {p['text']}" for p in ctx["timeline"]) or "- (quiet)"
     memory = " | ".join(agent.memory[-3:]) or "(none)"
     holdings = ", ".join(f"{q} ${t}" for t, q in ctx["holdings"].items() if q) or "nothing"
@@ -157,16 +159,17 @@ def detect_provider() -> str:
 class LLMBrain:
     mode = "llm"
 
-    def __init__(self, provider: str, concurrency: int = 24):
+    def __init__(self, provider: str, concurrency: int = 24, http_client=None):
         from openai import AsyncOpenAI
 
         cfg = PROVIDERS[provider]
         self.provider = provider
         self.client = AsyncOpenAI(
             base_url=os.getenv("LLM_BASE_URL") or cfg["base_url"],
-            api_key=os.getenv(cfg["key_env"]) or os.getenv("LLM_API_KEY", ""),
+            api_key=os.getenv(cfg["key_env"]) or os.getenv("LLM_API_KEY", "") or "unset",
             timeout=float(os.getenv("LLM_TIMEOUT", "30")),
             max_retries=1,
+            http_client=http_client,
         )
         self.fast_model = os.getenv("FAST_MODEL") or cfg["fast"]
         self.big_model = os.getenv("BIG_MODEL") or cfg["big"] or self.fast_model
@@ -239,7 +242,8 @@ class LLMBrain:
                                          + "; ".join(n["text"] for n in ctx["news"]) + "\nNext headline:"},
         ]
         text, _, _ = await self.complete(msgs, max_tokens=60)
-        return _THINK.sub("", text).strip().strip('"').splitlines()[0][:140]
+        lines = [ln.strip().strip('"*').strip() for ln in _THINK.sub("", text).splitlines()]
+        return next((ln for ln in lines if ln), "Markets in chaos as traders panic")[:140]
 
     async def narrate(self, system: str, user: str, fallback: str, max_tokens: int = 140) -> str:
         """Short commentary (SEC verdicts, move forensics, round recaps). Never fails: falls back to the template."""
@@ -290,7 +294,7 @@ class MockBrain:
         closes = ctx["closes"] or [ctx["price"]]
         mom = (closes[-1] / closes[max(0, len(closes) - 6)] - 1) * 12
         mom = max(-1.2, min(1.2, mom - 0.25 if mom > 0.25 else mom + 0.25 if mom < -0.25 else 0.0))  # ignore chop
-        news = sum(sentiment(n["text"]) * max(0.0, 1 - n["age"] / 60) for n in ctx["news"][:3])
+        news = sum(sentiment(n["text"]) * max(0.0, 1 - n["age"] / 60) * n.get("cred", 1.0) for n in ctx["news"][:3])
         herd = sum(p["side"] for p in ctx["timeline"]) / max(1, len(ctx["timeline"]))
         anchor = ctx["anchor"]
         val = (ctx["fair"] * anchor / ctx["price"] - 1) * 5

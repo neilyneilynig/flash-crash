@@ -31,6 +31,10 @@ HUMAN_STAKE = 2_000  # starting dollars of each stock, so players can sell from 
 PLAYER_TIMEOUT = 60  # seconds without a phone check-in before a player is dropped at the next reset
 SEC_LOOKBACK = 45  # trades this long before your own leak count as suspicious
 ALARM_MOVE = 0.04  # a 4% move within ~12s triggers the forensics desk
+HALT_MOVE = 0.12  # a 12% move within ~20s trips the circuit breaker...
+HALT_SECONDS = 8  # ...which halts that stock for a few seconds
+CRED_DECAY = 0.55  # each leak multiplies the leaker's credibility by this
+CRED_RECOVERY = 0.5 / 120  # credibility regained per second (half of it in two minutes)
 
 # A scripted 3-minute show for demos and the submission video: (seconds in, headline or None for AI chaos)
 DEMO_SCRIPT = [
@@ -65,10 +69,11 @@ class NewsItem:
     ts: float
     tickers: list[str]  # stocks this headline is about
     prices: dict[str, float]  # their prices when it broke
+    cred: float = 1.0  # how much the AIs believe the source (serial leakers lose it)
 
     def as_dict(self) -> dict:
         return {"id": self.id, "text": self.text, "source": self.source, "author": self.author, "ts": self.ts,
-                "tickers": self.tickers, "prices": self.prices}
+                "tickers": self.tickers, "prices": self.prices, "cred": round(self.cred, 2)}
 
 
 @dataclass
@@ -99,10 +104,16 @@ class Market:
     anchor: float = 0.0  # news-driven fundamental value (used by mock brains)
     volume: int = 0
     mm_ref: float | None = None
+    halted_until: float = 0.0
+    last_halt: float = 0.0
 
     @property
     def price(self) -> float:
         return self.exchange.last_price
+
+    @property
+    def halted(self) -> bool:
+        return time.time() < self.halted_until
 
     @property
     def open_price(self) -> float:
@@ -129,6 +140,7 @@ class World:
     fills: dict[str, list[dict]] = field(default_factory=dict)  # player id -> their trades, for chart markers
     cost: dict[str, dict[str, float]] = field(default_factory=dict)  # player id -> ticker -> cost basis held
     sec_cases: list[dict] = field(default_factory=list)  # insider-trading fines this round
+    cred: dict[str, tuple[float, float]] = field(default_factory=dict)  # player id -> (credibility, as of)
     moves: list[dict] = field(default_factory=list)  # big moves the forensics desk explained
 
 
@@ -282,12 +294,25 @@ class Simulation:
                 if abs(closes[-1] / closes[0] - 1) >= ALARM_MOVE and now - self._explained.get(tk, 0) > 30:
                     self._explained[tk] = now
                     self._spawn(self._forensics(tk))
+                await self._circuit_breaker(m, now)
+
+    async def _circuit_breaker(self, m: Market, now: float) -> None:
+        """Like a real exchange: a stock that moves too far too fast is halted for a few seconds."""
+        closes = m.closes(10)
+        move = closes[-1] / closes[0] - 1
+        if m.halted or now - m.last_halt < 40 or abs(move) < HALT_MOVE:
+            return
+        m.halted_until, m.last_halt = now + HALT_SECONDS, now
+        for oid in list(m.exchange.orders):  # the book is wiped; everyone re-quotes after the halt
+            m.exchange.cancel(oid)
+        await self._emit({"type": "halt", "ticker": m.stock.ticker, "seconds": HALT_SECONDS, "move_pct": round(move * 100, 1)})
 
     async def _mm_loop(self) -> None:
         while True:
             await asyncio.sleep(1.0)
             for m in self.world.markets.values():
-                self._quote(m, self.analytics(m.stock.ticker).get("volatility", 0) or 0)
+                if not m.halted:
+                    self._quote(m, self.analytics(m.stock.ticker).get("volatility", 0) or 0)
 
     def _quote(self, m: Market, vol: float = 0.0) -> None:
         """Market maker quoting around a slow moving average: it absorbs noise but lets real news through."""
@@ -397,10 +422,14 @@ class Simulation:
             age = now - n.ts
             if age < 45:
                 for t in n.tickers:
-                    heat[t] += 9.0 * (1 - age / 45) / len(n.tickers) ** 0.5  # breaking news pulls the crowd in
+                    heat[t] += 9.0 * n.cred * (1 - age / 45) / len(n.tickers) ** 0.5  # breaking news pulls the crowd in
         for t, m in self.world.markets.items():
             closes = m.closes(6)
             heat[t] += min(3.0, abs(closes[-1] / closes[0] - 1) * 60)
+            if m.halted:
+                heat[t] = 0.0
+        if not any(heat.values()):
+            return self.rng.choice(TICKERS)
         return self.rng.choices(TICKERS, weights=[heat[t] for t in TICKERS])[0]
 
     def context_for(self, agent: Agent, ticker: str) -> dict:
@@ -431,7 +460,7 @@ class Simulation:
             "pnl_pct": self.pnl_pct(agent.id),
             "max_buy": int(acct.free_cash // (price * 1.01)),
             "max_sell": acct.free_shares,
-            "news": [{"text": n.text, "age": int(now - n.ts)} for n in reversed(news)],
+            "news": [{"text": n.text, "age": int(now - n.ts), "author": n.author, "cred": n.cred} for n in reversed(news)],
             "timeline": [{"handle": f.handle, "ticker": f.ticker, "text": f.thought,
                           "side": 1 if f.action == "buy" else -1} for f in timeline],
         }
@@ -455,7 +484,7 @@ class Simulation:
                 continue
             finally:
                 agent.busy = False
-            if gen == self.gen and not self.paused:
+            if gen == self.gen and not self.paused and not self.world.markets[ticker].halted:
                 await self.apply(agent, ticker, decision)
 
     async def apply(self, agent: Agent, ticker: str, d: Decision) -> FeedItem:
@@ -487,16 +516,24 @@ class Simulation:
         tickers = route_news(text, ticker)
         mood = sentiment(text)
         macro = len(tickers) == len(TICKERS) and len(TICKERS) > 1
+        cred = 1.0
+        if player_id:  # the boy who cried wolf: every leak makes the AIs trust you a bit less
+            cred = self.credibility(player_id)
+            self.world.cred[player_id] = (max(0.1, cred * CRED_DECAY), time.time())
         for t in tickers:
-            self.world.markets[t].anchor *= 1 + (0.08 if macro else 0.2) * mood
+            self.world.markets[t].anchor *= 1 + (0.08 if macro else 0.2) * mood * cred
         item = NewsItem(next(self._ids), text, source, author, time.time(), tickers,
-                        {t: round(self.world.markets[t].price, 2) for t in tickers})
+                        {t: round(self.world.markets[t].price, 2) for t in tickers}, cred)
         self.world.news.append(item)
         del self.world.news[:-50]
         await self._emit({"type": "news", "item": item.as_dict()})
         if player_id and player_id in self.world.agents and mood:
             self._spawn(self._sec_watch(player_id, item, mood))
         return item
+
+    def credibility(self, pid: str) -> float:
+        value, at = self.world.cred.get(pid, (1.0, 0.0))
+        return min(1.0, value + (time.time() - at) * CRED_RECOVERY)
 
     # --- the AI SEC ---------------------------------------------------------
     async def _sec_watch(self, pid: str, news: NewsItem, mood: float) -> None:
@@ -642,6 +679,8 @@ class Simulation:
             raise ValueError("the round is over, start a new one on the TV")
         m = self.market(ticker)
         tk = m.stock.ticker
+        if m.halted:
+            raise ValueError(f"${tk} is halted by the circuit breaker. Back in a few seconds!")
         acct = m.exchange.accounts[pid]
         if qty == "all":
             qty = int(acct.free_cash // (m.price * 1.02)) if side == "buy" else acct.free_shares
@@ -673,6 +712,7 @@ class Simulation:
         eq = self.equity(pid)
         return {"cash": round(w.wallets[pid].cash, 2), "equity": round(eq, 2), "pnl_pct": round(self.pnl_pct(pid), 2),
                 "rank": (ranks or self._ranks())[pid], "of": len(w.agents), "positions": positions,
+                "cred": round(self.credibility(pid), 2),
                 "trades": w.fills.get(pid, [])}
 
     def _ranks(self) -> dict[str, int]:
@@ -744,7 +784,8 @@ class Simulation:
     def markets_summary(self) -> list[dict]:
         press = self.pressure()
         return [{"ticker": t, "company": m.stock.company, "blurb": m.stock.blurb, "price": round(m.price, 2),
-                 "open": m.open_price, "change_pct": round(m.change_pct, 2), "volume": m.volume, "buy_pressure": press[t]}
+                 "open": m.open_price, "change_pct": round(m.change_pct, 2), "volume": m.volume, "buy_pressure": press[t],
+                 "halted": m.halted}
                 for t, m in self.world.markets.items()]
 
     def snapshot(self) -> dict:

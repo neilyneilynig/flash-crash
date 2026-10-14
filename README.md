@@ -20,7 +20,10 @@ and flash crashes emerge on their own. Play free-form or in **timed 5-minute rou
 
 But careful: an **AI SEC** watches for insider trading. Buy a stock, leak good news about it and profit, and you may get
 busted on the big screen. And whenever a stock rips or crashes, an **AI forensics analyst** explains why: the headline and
-which trader personalities drove it, with dollar flows.
+which trader personalities drove it, with dollar flows. Spamming leaks doesn't work for long: every leak costs you
+**credibility**, so the AIs react less and start calling you out ("Neil again? Not falling for it."). And like a real
+exchange, a stock that moves 12% in 20 seconds trips a **circuit breaker** and is halted. The TV has synthesized sound
+effects (breaking-news sting, crash siren, SEC sirens, cha-ching on player trades, round fanfare; **M** mutes).
 **Alexa+** (or any AI agent) can join in over **MCP**: *"Alexa, leak that RoboRide just got approved in every city."*
 
 ![TV dashboard](docs/tv.png)
@@ -147,7 +150,8 @@ the LAN IP, `PUBLIC_URL` or `MCP_ALLOWED_HOSTS`.
 
 ## Tests
 
-`uv run pytest`: order book invariants (cash and share conservation across 3,000 random orders, one wallet shared across
+`uv run pytest`: the live Nebius/Nemotron path against a fake OpenAI-compatible server (model resolution, the
+`enable_thinking` retry, `<think>` stripping, graceful fallback when the provider is down), order book invariants (cash and share conservation across 3,000 random orders, one wallet shared across
 books), reply parsing for messy LLM output, news routing, chatter variety, timed rounds and an end-to-end simulation run.
 
 ## Security notes

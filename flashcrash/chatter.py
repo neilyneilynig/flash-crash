@@ -108,6 +108,11 @@ REACT: dict[tuple[str, str], list[str]] = {
     ("sell", "meh"): ["{n}? Feels bad for {t}. Selling.", "No idea what {n} means for {t}. Selling to be safe."],
 }
 
+# When a serial leaker strikes again: {a} is the leaker
+SKEPTIC = ["{a} again? Not falling for it this time.", "Another 'scoop' from {a}. Sure, buddy.",
+           "{a} cried wolf one too many times. Ignoring.", "Reminder: {a} has leaked like 5 headlines today. Holding.",
+           "Is {a} ok? That's the third 'breaking news' this minute.", "I don't trade on {a}'s fan fiction."]
+
 AGREE = ["@{h} exactly what I was thinking", "@{h} right there with you", "@{h} great minds", "@{h} 100%. Same trade.",
          "@{h} finally someone gets it"]
 DISAGREE = ["@{h} you're going to regret that", "@{h} thanks for the liquidity 😘", "@{h} bold move. Wrong, but bold.",
@@ -179,7 +184,11 @@ class Chatter:
         fresh = [n for n in ctx["news"] if n["age"] < 40]
         for _ in range(5):
             pools = []
-            if fresh and r.random() < 0.55:
+            n0 = fresh[0] if fresh else None
+            doubter = n0 is not None and (side == "hold" or (mood_of(n0["text"]) > 0) == (side == "sell"))
+            if doubter and n0.get("cred", 1.0) < 0.6 and r.random() < 0.7:  # only those trading against the leak scoff at it
+                pools.append((SKEPTIC, {"a": fresh[0].get("author", "someone")}))
+            elif fresh and r.random() < 0.55:
                 n = fresh[0]
                 s = mood_of(n["text"])
                 mood = "good" if s > 0 else "bad" if s < 0 else "meh"
@@ -196,7 +205,7 @@ class Chatter:
             lines, extra = pools[0]
             text = r.choice(lines).format(t="$" + tk, co=ctx.get("company", tk), p=f"${ctx['price']:.2f}",
                                           chg=f"{chg:+.1f}%", move=move, other="$" + r.choice(others),
-                                          **{"n": "", "h": "", **extra})
+                                          **{"n": "", "h": "", "a": "", **extra})
             if agent.quirk and r.random() < 0.6:
                 text = _quirk(text, agent.quirk, side, r)
             if text not in self._seen:

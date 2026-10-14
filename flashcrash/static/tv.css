@@ -147,3 +147,12 @@ main { flex: 1; display: flex; gap: 24px; min-height: 0; }
 #feed li.sec { background: #2a0d12; margin: 0 -10px; padding: 9px 10px; border-radius: 8px; border-left: 4px solid var(--down); }
 
 #pod-recap { margin-top: 26px; max-width: 1300px; font-size: 30px; line-height: 1.4; text-align: center; color: #e7ecf3; font-style: italic; }
+
+/* circuit breaker */
+#halt { position: absolute; left: 50%; top: 380px; transform: translateX(-50%); z-index: 12; text-align: center; padding: 30px 70px;
+  background: rgba(10, 10, 14, .96); border: 6px solid var(--accent); border-radius: 24px; animation: pop .35s ease-out; }
+.halt-tag { font-size: 30px; font-weight: 900; letter-spacing: 6px; color: var(--accent); }
+#halt-title { font-size: 84px; font-weight: 900; margin-top: 8px; }
+#halt-sub { font-size: 26px; color: var(--dim); margin-top: 6px; font-variant-numeric: tabular-nums; }
+.tk.halted { border-color: var(--accent); background: repeating-linear-gradient(45deg, #1b1a10 0 14px, #26220e 14px 28px); }
+.tk.halted .px::after { content: " ⛔"; }

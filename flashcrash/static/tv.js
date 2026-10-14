@@ -10,6 +10,41 @@
   window.addEventListener("resize", fit);
   fit();
 
+  // --- sound: synthesized with WebAudio, no files ----------------------------
+  var Snd = (function () {
+    var ctx = null, on = localStorage.getItem("fc_sound") !== "0";
+    function ac() {
+      if (!ctx) { try { ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return null; } }
+      if (ctx.state === "suspended") ctx.resume();
+      return ctx;
+    }
+    function tone(freq, at, dur, type, vol, to) {
+      var c = on && ac(); if (!c) return;
+      var t = c.currentTime + at, o = c.createOscillator(), g = c.createGain();
+      o.type = type || "sine";
+      o.frequency.setValueAtTime(freq, t);
+      if (to) o.frequency.exponentialRampToValueAtTime(to, t + dur);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(vol || 0.15, t + 0.015);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.connect(g); g.connect(c.destination);
+      o.start(t); o.stop(t + dur + 0.05);
+    }
+    return {
+      news: function () { tone(880, 0, .12, "square", .06); tone(660, .14, .12, "square", .06); tone(990, .28, .3, "square", .07); },
+      crash: function () { tone(900, 0, 1.3, "sawtooth", .1, 110); tone(450, .1, 1.2, "sawtooth", .06, 60); },
+      moon: function () { [523, 659, 784, 1047, 1319].forEach(function (f, i) { tone(f, i * .08, .3, "triangle", .14); }); },
+      cash: function () { tone(1568, 0, .07, "square", .05); tone(2093, .06, .2, "square", .05); },
+      sec: function () { for (var i = 0; i < 4; i++) { tone(650, i * .5, .25, "sawtooth", .08, 1050); tone(1050, i * .5 + .25, .25, "sawtooth", .08, 650); } },
+      halt: function () { tone(140, 0, .4, "square", .14); tone(140, .5, .4, "square", .14); tone(105, 1, .7, "square", .14); },
+      fanfare: function () { [[523, 0], [659, .15], [784, .3], [1047, .45], [784, .75], [1047, .9]].forEach(function (n) { tone(n[0], n[1], .35, "triangle", .16); }); },
+      toggle: function () { on = !on; localStorage.setItem("fc_sound", on ? "1" : "0"); if (on) ac(); return on; },
+      wake: ac,
+      on: function () { return on; },
+    };
+  })();
+  function sndLabel() { $("snd").textContent = Snd.on() ? "🔊" : "🔇"; }
+
   // --- stocks ---------------------------------------------------------------
   // The chart follows one stock at a time: ▲ ▼ on the remote switch, breaking news jumps to the stock it's about.
   var markets = [];          // latest summary from the server
@@ -98,6 +133,7 @@
     return Math.sqrt(f.filled || f.qty * 0.2) + Math.random() * 6 + (f.ticker === focus ? 4 : 0);
   }
   function queueFeed(f) {
+    if (f.human && f.filled) Snd.cash();
     if (!f.thought && !f.human) return;
     if (f.action !== "hold" && !f.qty) return;
     queue.push(f);
@@ -145,7 +181,9 @@
     el.className = GOOD.test(n.text) ? "good" : "";
     $("flash-text").textContent = n.text;
     var who = n.tickers && n.tickers.length < markets.length ? n.tickers.map(function (t) { return "$" + t; }).join(" · ") + " · " : "WHOLE MARKET · ";
-    $("flash-src").textContent = who + (SRC[n.source] || n.source) + (n.author && n.author !== "anon" ? " · " + n.author : "");
+    $("flash-src").textContent = who + (SRC[n.source] || n.source) + (n.author && n.author !== "anon" ? " · " + n.author : "") +
+      (n.cred != null && n.cred < 0.8 ? " · 🤨 credibility " + Math.round(n.cred * 100) + "%" : "");
+    Snd.news();
     clearTimeout(flashTimer);
     flashTimer = setTimeout(function () { el.className = "hidden"; }, 4200);
   }
@@ -166,6 +204,7 @@
     var el = $("alarm");
     el.className = move < 0 ? "crash" : "moon";
     el.innerHTML = '<div style="text-align:center">$' + esc(t) + "<br>" + (move < 0 ? "FLASH CRASH" : "TO THE MOON") + "</div>";
+    if (move < 0) Snd.crash(); else Snd.moon();
     setTimeout(function () { el.className = "hidden"; }, 2500);
   }
 
@@ -175,7 +214,7 @@
   function sign(n, d) { return (n >= 0 ? "+" : "") + fmt(n, d); }
   function renderTickers() {
     $("tickers").innerHTML = markets.map(function (m) {
-      var cls = "tk" + (m.ticker === focus ? " on" : "") + (Date.now() - (hot[m.ticker] || 0) < 3000 ? " hot" : "");
+      var cls = "tk" + (m.ticker === focus ? " on" : "") + (Date.now() - (hot[m.ticker] || 0) < 3000 ? " hot" : "") + (m.halted ? " halted" : "");
       return '<div class="' + cls + '"><b>$' + esc(m.ticker) + '</b><span class="px">' + fmt(m.price, 2) + '</span>' +
         '<span class="co">' + esc(m.company) + '</span><span class="ch ' + (m.change_pct >= 0 ? "up" : "down") + '">' +
         sign(m.change_pct, 2) + '%</span><span class="bar" title="AI buying vs selling, last 30s"><i style="width:' +
@@ -263,6 +302,7 @@
     $("sec-title").textContent = c.player + " fined $" + fmt(c.fine, 0);
     $("sec-text").textContent = c.text;
     $("sec").classList.remove("hidden");
+    Snd.sec();
     clearTimeout(secTimer);
     secTimer = setTimeout(function () { $("sec").classList.add("hidden"); }, 7000);
     var li = document.createElement("li");
@@ -270,6 +310,24 @@
     li.innerHTML = '<span class="who">👮 @AI_SEC</span><span class="act down">FINE $' + fmt(c.fine, 0) + '</span><span class="tkr">$' +
       esc(c.ticker) + "</span><br>" + esc(c.text);
     $("feed").insertBefore(li, $("feed").firstChild);
+  }
+
+  // --- circuit breaker ---------------------------------------------------------------
+  var haltTimer = null;
+  function showHalt(h) {
+    if (Date.now() > manualUntil) setFocusStock(h.ticker, false);
+    $("halt-title").textContent = "$" + h.ticker + " HALTED";
+    var left = h.seconds;
+    function tick() {
+      $("halt-sub").textContent = "moved " + sign(h.move_pct, 1) + "% in 20s · trading resumes in " + left + "s";
+      if (left-- <= 0) { $("halt").classList.add("hidden"); return; }
+      haltTimer = setTimeout(tick, 1000);
+    }
+    clearTimeout(haltTimer);
+    $("why").classList.add("hidden");
+    $("halt").classList.remove("hidden");
+    tick();
+    Snd.halt();
   }
 
   function roundOver(d) {
@@ -286,6 +344,7 @@
       (humanBest != null ? (humanBest > ai.pnl_pct ? " · Humans beat the bots! 🎉" : " · The bots win this time 🤖") : "") : "";
     $("pod-recap").textContent = d.recap ? "🎙️ " + d.recap : "";
     $("podium").classList.remove("hidden");
+    Snd.fanfare();
   }
 
   // --- websocket ------------------------------------------------------------
@@ -301,10 +360,13 @@
       else if (m.type === "round_over") roundOver(m.data);
       else if (m.type === "explain") showWhy(m.item);
       else if (m.type === "sec") showSec(m.item);
+      else if (m.type === "halt") showHalt(m);
     };
     ws.onclose = function () { setTimeout(connect, 1500); };
   }
   connect();
+  sndLabel();
+  document.addEventListener("click", function () { Snd.wake(); });
 
   // --- join QR ----------------------------------------------------------------
   fetch("/api/info").then(function (r) { return r.json(); }).then(function (info) {
@@ -348,6 +410,8 @@
   });
   document.addEventListener("keydown", function (e) {
     var k = e.key, c = e.keyCode;
+    Snd.wake(); // browsers only allow audio after the first key press
+    if (k === "m" || k === "M") { Snd.toggle(); sndLabel(); return; }
     if (k === "ArrowRight" || c === 22) { setFocus(focusIdx + 1); e.preventDefault(); }
     else if (k === "ArrowLeft" || c === 21) { setFocus(focusIdx - 1); e.preventDefault(); }
     else if (k === "ArrowUp" || c === 19) { stepStock(-1); e.preventDefault(); }

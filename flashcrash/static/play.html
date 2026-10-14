@@ -48,6 +48,11 @@
   .stk .p { font-variant-numeric: tabular-nums; }
   .stk.on { border-color: var(--accent); background: #1b1a10; }
   .stk.hot { animation: hot 1s ease-out 3; }
+  .stk.halted { border-color: var(--accent); background: repeating-linear-gradient(45deg, #1b1a10 0 10px, #26220e 10px 20px); }
+  .halted-note { margin-top: 10px; text-align: center; color: var(--accent); font-weight: 800; font-size: 14px; }
+  .cred { margin-top: 12px; font-size: 13px; color: var(--dim); }
+  .cred .meter { height: 8px; border-radius: 4px; background: #2a3342; margin: 6px 0 4px; overflow: hidden; }
+  .cred .meter i { display: block; height: 100%; border-radius: 4px; transition: width .5s, background .5s; }
   @keyframes hot { 50% { background: #3a2a06; } }
 
   /* quote */
@@ -226,6 +231,7 @@
         </div>
         <div class="est"><span id="est">–</span><span id="avail">–</span></div>
         <div class="row"><button class="buy bigbtn" id="buy">BUY</button><button class="sell bigbtn" id="sell">SELL</button></div>
+        <div class="halted-note hidden" id="halted-note">⛔ Circuit breaker: trading halted for a few seconds</div>
         <button class="sellall" id="sellall">Dump all my shares</button>
       </div>
     </section>
@@ -242,6 +248,9 @@
         <button class="primary" id="leak">📰 Leak it to the market</button>
         <div class="chips" id="chips"></div>
         <button class="ghost" id="chaos" style="width:100%;margin-top:8px">🎲 Let the AI newsroom write one</button>
+        <div class="cred"><span>📣 Your credibility with the AIs: <b id="cred-v">100%</b></span>
+          <div class="meter"><i id="cred-bar" style="width:100%;background:var(--up)"></i></div>
+          <span id="cred-tip">Every leak makes the AIs trust you a little less. It recovers over time, so pick your moment.</span></div>
       </div>
       <div class="card">
         <p class="label">Your leaks</p>
@@ -328,7 +337,8 @@
     <div class="demo"><span class="buy">BUY</span><span class="sell">SELL</span></div></div>
   <div class="slide"><div class="big">📰</div><h2>Leak fake news</h2>
     <p>Type a headline or tap 🎤 and <b>say it</b>. Name a company and <b>every AI reads it</b> and piles in.</p>
-    <p style="margin-top:12px;color:var(--accent)">"Doge Burger adds a $1,000 golden burger"</p></div>
+    <p style="margin-top:12px;color:var(--accent)">"Doge Burger adds a $1,000 golden burger"</p>
+    <p style="margin-top:12px">Leak too often and the AIs <b>stop believing you</b>.</p></div>
   <div class="slide"><div class="big">🧠</div><h2>The trick</h2>
     <p><b>Buy</b>, leak good news, <b>sell</b> into the spike.<br>Or <b>dump</b>, leak a scandal, <b>buy back</b> after the crash.</p>
     <p style="margin-top:12px">$MEME is the wildest. The AIs overreact, then calm down. Time it right.</p>
@@ -385,7 +395,7 @@
   var hotT = {};
   function renderStocks() {
     $("stocks").innerHTML = markets.map(function (m) {
-      var cls = "stk" + (m.ticker === sel ? " on" : "") + (Date.now() - (hotT[m.ticker] || 0) < 3000 ? " hot" : "");
+      var cls = "stk" + (m.ticker === sel ? " on" : "") + (Date.now() - (hotT[m.ticker] || 0) < 3000 ? " hot" : "") + (m.halted ? " halted" : "");
       return '<button class="' + cls + '" data-t="' + m.ticker + '"><b>$' + m.ticker + '</b><span class="p">' + fmt(m.price, 2) +
         '</span> <span class="' + (m.change_pct >= 0 ? "up" : "down") + '">' + sign(m.change_pct, 1) + "%</span></button>";
     }).join("");
@@ -402,6 +412,8 @@
     if (lastPx[sel] != null && lastPx[sel] !== m.price) px.className = "px " + (m.price > lastPx[sel] ? "up" : "down");
     lastPx[sel] = m.price;
     $("q-ch").textContent = sign(m.change_pct, 2) + "% today";
+    $("halted-note").classList.toggle("hidden", !m.halted);
+    $("buy").disabled = $("sell").disabled = $("sellall").disabled = !!m.halted;
     $("q-ch").className = "ch " + (m.change_pct >= 0 ? "up" : "down");
     var p = pos(sel);
     $("q-pos").innerHTML = p && p.shares
@@ -420,6 +432,12 @@
     $("pnl").className = p.pnl_pct >= 0 ? "up" : "down";
     $("rank").textContent = "#" + p.rank;
     $("cash").textContent = money(p.cash);
+    var cr = p.cred == null ? 1 : p.cred;
+    $("cred-v").textContent = Math.round(cr * 100) + "%";
+    $("cred-bar").style.width = Math.round(cr * 100) + "%";
+    $("cred-bar").style.background = cr > 0.7 ? "var(--up)" : cr > 0.4 ? "var(--accent)" : "var(--down)";
+    $("cred-tip").textContent = cr > 0.7 ? "Every leak makes the AIs trust you a little less. It recovers over time, so pick your moment."
+      : cr > 0.4 ? "The AIs are getting suspicious. Your next leak will hit softer." : "🤨 The AIs think you're crying wolf. Wait a bit before leaking again.";
     renderQuote();
     renderPositions();
     showMine();
@@ -932,6 +950,7 @@
       else if (m.type === "round_over") roundOver(m.data);
       else if (m.type === "explain") showWhy(m.item);
       else if (m.type === "sec") showSec(m.item);
+      else if (m.type === "halt") { toast("⛔ $" + m.ticker + " halted: moved " + sign(m.move_pct, 1) + "% too fast"); buzz([60, 60, 60]); }
       else if (m.type === "feed" && m.item.action !== "hold" && m.item.qty > 0 && (m.item.thought || m.item.human)) {
         queue.push(m.item);
         if (queue.length > 40) { queue.sort(function (a, b) { return interest(b) - interest(a); }); queue.length = 40; }
