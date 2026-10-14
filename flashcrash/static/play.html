@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#07090d">
+<title>Flash Crash · Play</title>
+<style>
+  :root { --bg:#07090d; --panel:#121722; --line:#232b38; --text:#e7ecf3; --dim:#7d8899; --up:#22d37e; --down:#ff4d5e; --accent:#ffd23f; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: Inter, system-ui, sans-serif; }
+  .wrap { max-width: 480px; margin: 0 auto; padding: 18px 16px 40px; }
+  h1 { font-size: 26px; margin: 4px 0 16px; letter-spacing: 1px; }
+  h1 .c { color: var(--down); } h1 .b { color: var(--accent); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px; margin-bottom: 14px; }
+  input, textarea { width: 100%; font: inherit; font-size: 18px; color: var(--text); background: #0b0f16; border: 1px solid var(--line);
+    border-radius: 12px; padding: 14px; outline: none; }
+  textarea { resize: none; height: 84px; }
+  button { font: inherit; font-weight: 800; border: 0; border-radius: 14px; padding: 16px; font-size: 18px; color: #fff; cursor: pointer; }
+  button:active { transform: scale(.97); }
+  .primary { background: var(--accent); color: #000; width: 100%; margin-top: 12px; }
+  .row { display: flex; gap: 10px; }
+  .row > * { flex: 1; }
+  .buy { background: var(--up); color: #000; } .sell { background: var(--down); }
+  .ghost { background: #1c2330; color: var(--text); font-size: 15px; padding: 12px 8px; }
+  .price { display: flex; justify-content: space-between; align-items: baseline; }
+  .price b { font-size: 40px; font-variant-numeric: tabular-nums; }
+  .up { color: var(--up); } .down { color: var(--down); }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 10px; text-align: center; }
+  .stats b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
+  .stats small { color: var(--dim); font-size: 12px; text-transform: uppercase; }
+  .label { color: var(--dim); font-size: 13px; text-transform: uppercase; letter-spacing: 1.5px; margin: 0 0 10px; }
+  .mic { background: #2b1838; width: 64px; flex: 0 0 64px; font-size: 26px; }
+  .mic.rec { background: var(--down); animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: .6; } }
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #222b3a; padding: 12px 18px; border-radius: 12px;
+    font-weight: 700; opacity: 0; transition: opacity .25s; pointer-events: none; max-width: 90%; text-align: center; }
+  .toast.show { opacity: 1; }
+  .hidden { display: none; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .chips button { flex: 1 1 45%; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><span class="b">⚡</span> FLASH <span class="c">CRASH</span></h1>
+
+  <div id="join-card" class="card">
+    <p class="label">You vs 300 AI traders</p>
+    <input id="name" placeholder="Your name" maxlength="20" autocomplete="off">
+    <button class="primary" id="join">Join the market</button>
+  </div>
+
+  <div id="game" class="hidden">
+    <div class="card">
+      <div class="price"><span>$GPU</span><b id="price">–</b><span id="chg">–</span></div>
+      <div class="stats">
+        <div><b id="cash">–</b><small>Cash</small></div>
+        <div><b id="shares">–</b><small>Shares</small></div>
+        <div><b id="pnl">–</b><small>P&amp;L</small></div>
+        <div><b id="rank">–</b><small>Rank</small></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <p class="label">Trade</p>
+      <div class="row"><button class="buy" data-side="buy" data-qty="10">BUY 10</button><button class="sell" data-side="sell" data-qty="10">SELL 10</button></div>
+      <div class="row" style="margin-top:10px"><button class="buy" data-side="buy" data-qty="all">BUY ALL IN</button><button class="sell" data-side="sell" data-qty="all">DUMP ALL</button></div>
+    </div>
+
+    <div class="card">
+      <p class="label">Leak breaking news</p>
+      <div class="row">
+        <textarea id="headline" maxlength="160" placeholder="e.g. GPU CEO caught selling chips to aliens"></textarea>
+        <button class="mic" id="mic" title="Speak a headline">🎤</button>
+      </div>
+      <button class="primary" id="leak">📰 Leak it to the market</button>
+      <div class="chips">
+        <button class="ghost" data-chip="GPU factory explodes, production halted">🔥 Factory fire</button>
+        <button class="ghost" data-chip="GPU smashes earnings, record profit">💰 Record profit</button>
+        <button class="ghost" data-chip="Regulators open fraud probe into GPU">⚖️ Fraud probe</button>
+        <button class="ghost" data-chip="Mystery whale buying every GPU share">🐋 Whale buying</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var me = JSON.parse(localStorage.getItem("fc_player") || "null");
+  var lastPrice = null;
+
+  function toast(t) { var el = $("toast"); el.textContent = t; el.classList.add("show"); clearTimeout(el._t); el._t = setTimeout(function () { el.classList.remove("show"); }, 2200); }
+  function post(url, body) {
+    return fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+      .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.detail || r.status); return j; }); });
+  }
+  function money(n) { return "$" + Math.round(n).toLocaleString(); }
+  function render(p) {
+    $("cash").textContent = money(p.cash);
+    $("shares").textContent = p.shares;
+    $("pnl").textContent = (p.pnl_pct >= 0 ? "+" : "") + p.pnl_pct.toFixed(1) + "%";
+    $("pnl").className = p.pnl_pct >= 0 ? "up" : "down";
+    $("rank").textContent = "#" + p.rank;
+  }
+  function start() {
+    $("join-card").classList.add("hidden");
+    $("game").classList.remove("hidden");
+    refresh();
+    setInterval(refresh, 1500);
+    connect();
+  }
+  function refresh() {
+    fetch("/api/me/" + me.id).then(function (r) {
+      if (r.status === 404) { localStorage.removeItem("fc_player"); location.reload(); return; }
+      return r.json().then(render);
+    }).catch(function () {});
+  }
+  function connect() {
+    var ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
+    ws.onmessage = function (ev) {
+      var m = JSON.parse(ev.data);
+      if (m.type !== "snapshot" && m.type !== "init" && m.type !== "reset") return;
+      var s = m.data, el = $("price");
+      el.textContent = s.price.toFixed(2);
+      if (lastPrice !== null && s.price !== lastPrice) el.className = s.price > lastPrice ? "up" : "down";
+      lastPrice = s.price;
+      $("chg").textContent = (s.change_pct >= 0 ? "+" : "") + s.change_pct.toFixed(2) + "%";
+      $("chg").className = s.change_pct >= 0 ? "up" : "down";
+    };
+    ws.onclose = function () { setTimeout(connect, 1500); };
+  }
+
+  $("join").onclick = function () {
+    var name = $("name").value.trim() || "Player";
+    post("/api/join", { name: name }).then(function (p) {
+      me = { id: p.id, name: p.name };
+      localStorage.setItem("fc_player", JSON.stringify(me));
+      start();
+    }).catch(function (e) { toast("Couldn't join: " + e.message); });
+  };
+
+  Array.prototype.forEach.call(document.querySelectorAll("[data-side]"), function (b) {
+    b.onclick = function () {
+      var qty = b.getAttribute("data-qty");
+      post("/api/trade", { id: me.id, side: b.getAttribute("data-side"), qty: qty === "all" ? "all" : Number(qty) })
+        .then(function (r) { render(r); toast(r.filled ? (b.getAttribute("data-side") === "buy" ? "Bought " : "Sold ") + r.filled + " @ $" + r.price.toFixed(2) : "Nothing filled"); })
+        .catch(function (e) { toast(e.message); });
+    };
+  });
+
+  var source = "crowd";
+  function leak(text) {
+    if (!text.trim()) return toast("Write a headline first");
+    post("/api/news", { text: text, author: me.name, source: source })
+      .then(function () { $("headline").value = ""; source = "crowd"; toast("📰 Leaked! Watch the TV."); })
+      .catch(function (e) { toast(e.message); });
+  }
+  $("leak").onclick = function () { leak($("headline").value); };
+  Array.prototype.forEach.call(document.querySelectorAll("[data-chip]"), function (b) {
+    b.onclick = function () { leak(b.getAttribute("data-chip")); };
+  });
+
+  // voice leaks: Web Speech API where available (Chrome / Android / Safari)
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) $("mic").style.display = "none";
+  $("mic").onclick = function () {
+    var rec = new SR();
+    rec.lang = "en-US";
+    rec.interimResults = true;
+    $("mic").classList.add("rec");
+    rec.onresult = function (e) {
+      $("headline").value = Array.prototype.map.call(e.results, function (r) { return r[0].transcript; }).join("");
+      source = "voice";
+    };
+    rec.onend = function () {
+      $("mic").classList.remove("rec");
+      if (source === "voice" && $("headline").value.trim()) leak($("headline").value);
+    };
+    rec.onerror = function (e) { toast("Mic: " + e.error); };
+    rec.start();
+  };
+
+  if (me) start();
+})();
+</script>
+</body>
+</html>

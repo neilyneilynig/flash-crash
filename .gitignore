@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.pytest_cache/
+firetv/.gradle/
+firetv/build/
+firetv/app/build/
+firetv/local.properties
+*.apk
+!dist/*.apk

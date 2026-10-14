@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1920, initial-scale=1">
+<title>Flash Crash</title>
+<link rel="stylesheet" href="/static/tv.css">
+</head>
+<body>
+<div id="app">
+  <header id="top">
+    <div class="brand"><span class="bolt">⚡</span>FLASH<span class="crash">CRASH</span></div>
+    <div class="quote">
+      <span class="sym">$GPU</span>
+      <span id="price">100.00</span>
+      <span id="change" class="chg">+0.00%</span>
+    </div>
+    <div class="meta">
+      <div><b id="agents">0</b><small>AI traders</small></div>
+      <div><b id="cpm">0</b><small>decisions/min</small></div>
+      <div><b id="tps">0</b><small>tokens/s</small></div>
+      <div id="mode" class="badge">MOCK</div>
+    </div>
+  </header>
+
+  <main>
+    <section id="left">
+      <div id="chart"></div>
+      <div id="headline-bar"><span class="tag">BREAKING</span><span id="headline">Waiting for news… scan the code and leak something.</span></div>
+      <nav id="controls">
+        <button class="btn hot" data-act="chaos">🎲 AI chaos news</button>
+        <button class="btn" data-news="GPU CEO arrested at the airport">🚔 CEO arrested</button>
+        <button class="btn" data-news="Fed announces surprise emergency rate cut">🏦 Fed cuts rates</button>
+        <button class="btn" data-news="GPU wins $50B contract to power every robot on Earth">🤖 Mega contract</button>
+        <button class="btn" data-act="real" id="btn-real">🌍 Real news</button>
+        <button class="btn" data-act="toggle_autopilot" id="btn-auto">📰 Autopilot: off</button>
+        <button class="btn" data-act="toggle_pause" id="btn-pause">⏸ Pause</button>
+        <button class="btn" data-act="reset">🔄 New round</button>
+      </nav>
+    </section>
+
+    <aside id="right">
+      <div class="panel" id="join">
+        <div id="qr"></div>
+        <div>
+          <h3>Beat the AI.</h3>
+          <p>Scan to trade &amp; leak news from your phone.</p>
+          <code id="join-url"></code>
+        </div>
+      </div>
+      <div class="panel" id="board-panel">
+        <h4>Who's winning</h4>
+        <ol id="board"></ol>
+      </div>
+      <div class="panel" id="feed-panel">
+        <h4>Trader timeline <small id="model"></small></h4>
+        <ul id="feed"></ul>
+      </div>
+    </aside>
+  </main>
+
+  <footer id="stats">
+    <span title="Excess kurtosis of returns: >0 means fat tails like real markets">Fat tails <b id="s-kurt">–</b></span>
+    <span title="Autocorrelation of |returns|: >0 means volatility clusters">Vol clustering <b id="s-vc">–</b></span>
+    <span>Max drawdown <b id="s-dd">–</b></span>
+    <span>Herding <b id="s-herd">–</b></span>
+    <span>Volume <b id="s-vol">0</b></span>
+    <span class="hint">◀ ▶ remote to choose · OK to fire</span>
+  </footer>
+
+  <div id="flash" class="hidden"><div class="flash-tag">BREAKING</div><div id="flash-text"></div><div id="flash-src"></div></div>
+  <div id="alarm" class="hidden"></div>
+</div>
+<script src="/static/vendor/lightweight-charts.js"></script>
+<script src="/static/vendor/qrcode.js"></script>
+<script src="/static/tv.js"></script>
+</body>
+</html>

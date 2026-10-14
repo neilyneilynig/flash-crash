@@ -1,0 +1,33 @@
+[project]
+name = "flash-crash"
+version = "0.1.0"
+description = "Your family vs. 300 AI traders: a living-room stock market game for Fire TV, Alexa+ (MCP) and phones."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.143.0",
+    "httpx>=0.28.1",
+    "mcp>=2.3.0",
+    "openai>=3.29.0",
+    "python-dotenv>=1.2.4",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
+
+[project.scripts]
+flash-crash = "flashcrash.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["flashcrash"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
