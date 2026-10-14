@@ -39,11 +39,31 @@
   .hidden { display: none; }
   .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
   .chips button { flex: 1 1 45%; }
+  h1 { display: flex; align-items: center; }
+  .help { margin-left: auto; width: 40px; height: 40px; padding: 0; border-radius: 50%; background: #1c2330; color: var(--text); font-size: 18px; }
+
+  /* tutorial */
+  #tut { position: fixed; inset: 0; background: var(--bg); z-index: 20; display: flex; flex-direction: column; padding: 20px 16px 28px; }
+  #tut .top { display: flex; justify-content: space-between; align-items: center; max-width: 480px; width: 100%; margin: 0 auto; }
+  #tut .skip { background: none; color: var(--dim); font-size: 15px; padding: 8px; }
+  #tut .dots { display: flex; gap: 8px; }
+  #tut .dots i { width: 8px; height: 8px; border-radius: 50%; background: #2a3342; transition: all .2s; }
+  #tut .dots i.on { background: var(--accent); width: 22px; border-radius: 4px; }
+  #tut .stage { flex: 1; display: flex; align-items: center; max-width: 480px; width: 100%; margin: 0 auto; overflow: hidden; }
+  #tut .slide { text-align: center; animation: tin .3s ease-out; width: 100%; }
+  @keyframes tin { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+  #tut .big { font-size: 72px; line-height: 1; margin-bottom: 18px; }
+  #tut h2 { font-size: 28px; margin: 0 0 12px; }
+  #tut p { color: #b9c2d0; font-size: 18px; line-height: 1.45; margin: 0 auto; max-width: 380px; }
+  #tut p b { color: var(--text); }
+  #tut .demo { display: flex; gap: 8px; justify-content: center; margin-top: 18px; }
+  #tut .demo span { padding: 10px 14px; border-radius: 10px; font-weight: 800; font-size: 15px; }
+  #tut .next { max-width: 480px; width: 100%; margin: 0 auto; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1><span class="b">⚡</span> FLASH <span class="c">CRASH</span></h1>
+  <h1><span class="b">⚡</span>&nbsp;FLASH&nbsp;<span class="c">CRASH</span><button class="help" id="help" title="How to play">?</button></h1>
 
   <div id="join-card" class="card">
     <p class="label">You vs 300 AI traders</p>
@@ -85,6 +105,28 @@
   </div>
 </div>
 <div class="toast" id="toast"></div>
+
+<div id="tut" class="hidden">
+  <div class="top"><div class="dots" id="tut-dots"></div><button class="skip" id="tut-skip">Skip</button></div>
+  <div class="stage" id="tut-stage"></div>
+  <button class="primary next" id="tut-next">Next</button>
+</div>
+<template id="tut-slides">
+  <div class="slide"><div class="big">⚡</div><h2>You vs 300 AI traders</h2>
+    <p>The TV shows a live stock, <b>$GPU</b>, traded by AI bots with personalities: degens, panic sellers, value investors and whales.</p></div>
+  <div class="slide"><div class="big">💰</div><h2>Trade from your phone</h2>
+    <p>You start with <b>$10,000</b> and <b>50 shares</b> at $100. Buy low, sell high.</p>
+    <div class="demo"><span class="buy">BUY 10</span><span class="sell">SELL 10</span></div></div>
+  <div class="slide"><div class="big">📰</div><h2>Leak fake news</h2>
+    <p>Type a headline or tap 🎤 and <b>say it</b>. It flashes on the TV and <b>every AI reads it</b> and reacts.</p>
+    <p style="margin-top:12px;color:var(--accent)">"GPU CEO arrested at the airport"</p></div>
+  <div class="slide"><div class="big">🧠</div><h2>The trick</h2>
+    <p><b>Buy</b>, leak good news, <b>sell</b> into the spike.<br>Or <b>dump</b>, leak a scandal, <b>buy back</b> after the crash.</p>
+    <p style="margin-top:12px">The AIs overreact, then calm down. Time it right.</p></div>
+  <div class="slide"><div class="big">🏆</div><h2>Beat the bots</h2>
+    <p>Finish with the <b>highest profit %</b>. Watch "Who's winning" on the TV. Your rank is on your phone.</p>
+    <p style="margin-top:12px">Tap <b>?</b> any time to see this again.</p></div>
+</template>
 <script>
 (function () {
   var $ = function (id) { return document.getElementById(id); };
@@ -183,6 +225,39 @@
   };
 
   if (me) start();
+
+  // --- tutorial: shown the first time a phone scans in, reopened with "?" ---
+  var slides = $("tut-slides").content.querySelectorAll(".slide");
+  var step = 0;
+  function seen(v) {
+    try { if (v) localStorage.setItem("fc_tutorial", "1"); return localStorage.getItem("fc_tutorial") === "1"; } catch (e) { return false; }
+  }
+  function show(i) {
+    step = i;
+    $("tut-stage").innerHTML = "";
+    $("tut-stage").appendChild(slides[i].cloneNode(true));
+    $("tut-dots").innerHTML = Array.prototype.map.call(slides, function (_, k) { return k === i ? '<i class="on"></i>' : "<i></i>"; }).join("");
+    $("tut-next").textContent = i === slides.length - 1 ? (me ? "Back to the game" : "Let's play") : "Next";
+  }
+  function openTut() { $("tut").classList.remove("hidden"); show(0); }
+  function closeTut() {
+    seen(true);
+    $("tut").classList.add("hidden");
+    if (!me) $("name").focus();
+  }
+  $("tut-next").onclick = function () { step < slides.length - 1 ? show(step + 1) : closeTut(); };
+  $("tut-skip").onclick = closeTut;
+  $("help").onclick = openTut;
+  var x0 = null;
+  $("tut").addEventListener("touchstart", function (e) { x0 = e.touches[0].clientX; }, { passive: true });
+  $("tut").addEventListener("touchend", function (e) {
+    if (x0 === null) return;
+    var dx = e.changedTouches[0].clientX - x0;
+    x0 = null;
+    if (dx < -50 && step < slides.length - 1) show(step + 1);
+    else if (dx > 50 && step > 0) show(step - 1);
+  });
+  if (!seen()) openTut();
 })();
 </script>
 </body>
