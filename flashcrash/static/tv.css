@@ -48,6 +48,10 @@ main { flex: 1; display: flex; gap: 24px; min-height: 0; }
 .btn.hot { background: #3a1d06; }
 .btn:focus, .btn.focus { outline: none; border-color: var(--accent); background: #2a2410; transform: scale(1.06); }
 .btn.on { color: var(--accent); }
+#notify-form { display: flex; gap: 12px; align-items: center; padding: 4px 0; }
+#notify-text { flex: 1; min-width: 0; padding: 13px 16px; color: var(--text); font: inherit; font-size: 19px; background: var(--panel); border: 2px solid var(--accent); border-radius: 10px; outline: none; }
+#notify-send, #notify-cancel { padding: 13px 18px; color: var(--text); font: inherit; font-weight: 800; font-size: 18px; background: #273041; border: 0; border-radius: 10px; cursor: pointer; }
+#notify-send { color: #000; background: var(--accent); }
 
 /* join */
 #join { display: flex; gap: 18px; align-items: center; }

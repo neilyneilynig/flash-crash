@@ -64,7 +64,7 @@ effects (breaking-news sting, crash siren, SEC sirens, cha-ching on player trade
 | Role | What it does |
 |---|---|
 | 300 traders | personas deciding trades and posting on the timeline |
-| Newsroom | invents chaos headlines on demand or on autopilot |
+| Newsroom | invents chaos headlines on demand or automatically every 45–75 seconds |
 | AI SEC | rules on insider trading: did you trade right before your own leak, and did it pay? |
 | Forensics analyst | explains every big move from the order flow by trader type |
 | Sportscaster | recaps each round on the podium |
@@ -88,9 +88,13 @@ A first-run tutorial, then four tabs:
 * **📈 Trade**: pick a stock, see its live chart with your buys/sells and your average cost marked, pick 1/10/50/100/MAX or any
   number, buy or sell. Chart options: 2s/10s/30s/1m candles, candles or line, and **indicators**: volume, SMA 20, EMA 9,
   Bollinger Bands, VWAP, RSI 14, MACD.
-* **📰 Leak**: type or speak a headline, aim it at a stock or the whole market, or let the AI newsroom write one. 20 seconds
+* **📰 Leak**: type or speak a headline, aim it at a stock or the whole market, or let the AI newsroom write one. You can
+  also ask the AI to turn a news idea into a draft and expected market impact, then explicitly review and publish it. 20 seconds
   later you're told how much your leak moved the price.
-* **💬 Chatter**: breaking news and the AI timeline, filterable to one stock.
+* **💬 Chatter**: breaking news and the AI timeline, filterable to one stock. The latest breaking headline also stays
+  visible above every phone tab and updates live.
+* **🎮 Party game keypad**: enter the clearly labeled in-app codes `CRASH` (selected-stock sell-off) or `FREEZE`
+  (brief global trading pause). These affect only the fictional game and notify every screen.
 * **💼 Portfolio**: positions with P&L, the player leaderboard, which AI personalities are winning, and your trade history.
 
 Achievements pop up as you play (first trade, up 10%, top 10 of all traders, beating every AI type, moving a stock 5% with a leak).
@@ -104,6 +108,9 @@ Achievements pop up as you play (first trade, up 10%, top 10 of all traders, bea
 | Any OpenAI-compatible API | `FLASHCRASH_PROVIDER=openai`, `LLM_BASE_URL`, `LLM_API_KEY`, `FAST_MODEL` | |
 
 `TAVILY_API_KEY` enables the **🌍 Real news** button, which injects a live real-world AI-chip headline into the market.
+The AI newsroom is enabled by default and injects a headline at a randomized 45–75 second interval. Its random
+headlines are mostly upbeat, with occasional neutral or downside developments to keep the market dynamic; set
+`AUTOPILOT_NEWS_MIN_SECONDS` and `AUTOPILOT_NEWS_MAX_SECONDS` to tune that cadence.
 
 ## Fire TV
 
@@ -112,6 +119,7 @@ The `firetv/` app is a native Fire OS (Android) app: a full-screen WebView tuned
 * **D-pad** ▲ ▼ switches the stock on the big chart (it also jumps to whichever stock is in the news); ◀ ▶ moves between
   controls; **OK** fires the selected one
 * **Play/Pause** pauses the market, **Fast-forward** asks the AI newsroom for a chaos headline, **Rewind** starts a 5-minute round
+* The TV control bar can also send a short announcement to every connected phone.
 * **Menu** opens server settings
 
 ```bash

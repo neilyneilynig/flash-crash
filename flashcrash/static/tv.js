@@ -187,6 +187,16 @@
     clearTimeout(flashTimer);
     flashTimer = setTimeout(function () { el.className = "hidden"; }, 4200);
   }
+  function showKeypad(e) {
+    var text = e.action === "crash" ? "🎮 CRASH: $" + e.ticker + " " + sign(e.move_pct, 1) + "%" :
+      "🧊 FREEZE: all trading paused for " + e.seconds + " seconds";
+    $("headline").textContent = text;
+    $("flash").className = e.action === "crash" ? "" : "good";
+    $("flash-text").textContent = text;
+    $("flash-src").textContent = "PARTY GAME KEYPAD · all players notified";
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(function () { $("flash").className = "hidden"; }, 4200);
+  }
 
   // --- crash / moon alarm (any stock) ----------------------------------------
   var priceHist = {};
@@ -357,6 +367,7 @@
       else if (m.type === "candle") pushCandle(m.ticker, m.candle);
       else if (m.type === "feed") queueFeed(m.item);
       else if (m.type === "news") showNews(m.item, true);
+      else if (m.type === "keypad") showKeypad(m);
       else if (m.type === "round_over") roundOver(m.data);
       else if (m.type === "explain") showWhy(m.item);
       else if (m.type === "sec") showSec(m.item);
@@ -386,10 +397,24 @@
   function fire(btn) {
     var act = btn.getAttribute("data-act"), news = btn.getAttribute("data-news");
     if (news) return post("/api/news", { text: news.replace("{co}", company(focus)), author: "TV remote", ticker: focus });
+    if (act === "notify") return openNotifier();
     if (act === "chaos") return post("/api/news/chaos", { ticker: focus });
     if (act === "real") return post("/api/news/real", {});
     if (act === "start_round") return post("/api/control", { action: act, minutes: 5 });
     return post("/api/control", { action: act });
+  }
+  function openNotifier() {
+    $("notify-form").classList.remove("hidden");
+    $("notify-text").focus();
+  }
+  function closeNotifier() {
+    $("notify-form").classList.add("hidden");
+    $("notify-text").value = "";
+  }
+  function sendNotification() {
+    var message = $("notify-text").value.trim();
+    if (!message) return;
+    post("/api/control", { action: "notify", message: message }).then(closeNotifier);
   }
   var buttons = [];
   var focusIdx = 0;
@@ -407,6 +432,12 @@
   $("tickers").addEventListener("click", function (e) {
     var tile = e.target.closest(".tk");
     if (tile) setFocusStock(tile.querySelector("b").textContent.slice(1), true);
+  });
+  $("notify-send").addEventListener("click", sendNotification);
+  $("notify-cancel").addEventListener("click", closeNotifier);
+  $("notify-text").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { sendNotification(); e.preventDefault(); }
+    else if (e.key === "Escape") closeNotifier();
   });
   document.addEventListener("keydown", function (e) {
     var k = e.key, c = e.keyCode;

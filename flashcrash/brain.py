@@ -234,12 +234,20 @@ class LLMBrain:
         return d
 
     async def write_headline(self, ctx: dict) -> str:
+        tone = {
+            "upbeat": "Favor a constructive, upbeat, bullish development: innovation, growth, a win or a partnership.",
+            "neutral": "Favor a surprising but broadly neutral development.",
+            "downside": "Favor a plausible downside development, without being graphic or alarming.",
+        }.get(ctx.get("tone"), "Favor a constructive, upbeat, bullish development.")
+        idea = ctx.get("idea")
         msgs = [
             {"role": "system", "content": f"You are the chaos editor of a financial newswire covering ${ctx['ticker']} ({ctx['company']}, a {ctx['blurb']}). "
                                            f"Write ONE surprising, funny but plausible breaking-news headline (max 14 words) that names {ctx['company']} or ${ctx['ticker']} and will move the stock. "
-                                           "Mix good and bad news; twists are welcome. Reply with the headline only."},
+                                           + tone + " Reply with the headline only."},
             {"role": "user", "content": f"${ctx['ticker']} at ${ctx['price']:.2f} ({ctx['change_pct']:+.1f}% today). Recent headlines: "
-                                         + "; ".join(n["text"] for n in ctx["news"]) + "\nNext headline:"},
+                                         + "; ".join(n["text"] for n in ctx["news"])
+                                         + (f"\nPlayer's news idea: {idea}\nTurn that idea into the headline." if idea else "")
+                                         + "\nNext headline:"},
         ]
         text, _, _ = await self.complete(msgs, max_tokens=60)
         lines = [ln.strip().strip('"*').strip() for ln in _THINK.sub("", text).splitlines()]
@@ -326,7 +334,15 @@ class MockBrain:
         return fallback
 
     async def write_headline(self, ctx: dict) -> str:
+        if ctx.get("idea"):
+            idea = " ".join(ctx["idea"].split())[:120]
+            return f"{ctx['company']}: {idea[:1].upper() + idea[1:]}"[:140]
         pool = MOCK_HEADLINES.get(ctx["ticker"], []) + GENERIC_HEADLINES
+        tone = ctx.get("tone", "upbeat")
+        if tone == "upbeat":
+            pool = [headline for headline in pool if sentiment(headline) > 0] or pool
+        elif tone == "downside":
+            pool = [headline for headline in pool if sentiment(headline) < 0] or pool
         return self.rng.choice(pool).format(t="$" + ctx["ticker"], co=ctx["company"])
 
 

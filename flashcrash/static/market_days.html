@@ -1,0 +1,20 @@
+<!doctype html>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Market Days</title>
+<style>
+:root{color-scheme:dark;--g:#65ff9b;--dim:#8aa394}*{box-sizing:border-box}body{margin:0;background:#07100c;color:#d8e7dc;font:15px ui-monospace,monospace}.shell{max-width:980px;margin:auto;padding:24px}h1{color:var(--g);margin:0 0 4px}.sub{color:var(--dim)}.bar,.panel{border:1px solid #244b37;background:#0b1811;padding:14px;margin-top:16px}.bar{display:flex;gap:8px;flex-wrap:wrap}input,button{font:inherit;padding:10px;border:1px solid #315c43;background:#061009;color:#d8e7dc}button{color:#07100c;background:var(--g);font-weight:bold;cursor:pointer}button:disabled{opacity:.5}table{width:100%;border-collapse:collapse}td,th{padding:9px;text-align:left;border-bottom:1px solid #1c3929}.up{color:var(--g)}.err{color:#ff8f8f}#events{white-space:pre-wrap;line-height:1.5}
+</style>
+<main class="shell"><h1>MARKET DAYS</h1><div class="sub">persistent paper-market sessions · terminal MVP</div>
+<div class="bar"><input id="name" value="Market Day" aria-label="game name"><input id="symbols" value="SPY,AAPL,NVDA" aria-label="symbols"><button id="create">Create session</button></div>
+<div id="status" class="panel">Loading configuration…</div><section id="game" class="hidden"><div class="panel"><b id="title"></b><button id="cycle">Run AI paper cycle</button><table><thead><tr><th>Symbol</th><th>Bid</th><th>Ask</th></tr></thead><tbody id="quotes"></tbody></table></div><div class="panel"><b>EVENT LOG</b><div id="events"></div></div></section></main>
+<script>
+(() => { const $=id=>document.getElementById(id); let game,base=location.origin,ws;
+const hidden=e=>e.classList.add("hidden"), show=e=>e.classList.remove("hidden");
+async function api(path,opts){let r=await fetch(base+path,opts);let j=await r.json();if(!r.ok)throw Error(j.detail||"request failed");return j}
+function paint(s){$("title").textContent=s.name+" · "+s.status;$("quotes").innerHTML=(s.quotes||[]).map(q=>`<tr><td>${q.symbol}</td><td>${q.bid}</td><td class=up>${q.ask}</td></tr>`).join("")||"<tr><td colspan=3>Configure Alpaca credentials to load live quotes.</td></tr>";$("events").textContent=(s.events||[]).map(e=>`${e.created_at}  ${e.kind}  ${JSON.stringify(e.payload)}`).join("\n")||"No AI orders yet.";show($("game"))}
+function connect(){if(ws)return;ws=new WebSocket(base.replace(/^http/,"ws")+"/ws");ws.onmessage=e=>{let m=JSON.parse(e.data);if(game&&m.type==="market_days"&&m.game_id===game.id)load()};ws.onclose=()=>{ws=null;setTimeout(connect,1500)}}
+async function load(){paint(await api("/api/days/games/"+game.id))}
+$("create").onclick=async()=>{try{game=await api("/api/days/games",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:$("name").value,symbols:$("symbols").value.split(",").map(x=>x.trim())})});connect();load()}catch(e){$("status").className="panel err";$("status").textContent=e.message}};
+$("cycle").onclick=async()=>{try{await api("/api/days/games/"+game.id+"/ai-cycle",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({symbol:game.symbols[0]})});load()}catch(e){$("status").className="panel err";$("status").textContent=e.message}};
+api("/api/days/config").then(c=>{$("status").textContent=c.enabled?(c.paper_trading?"Ready: PostgreSQL + Alpaca paper trading.":"PostgreSQL ready; set Alpaca variables for quotes/orders."):"Set DATABASE_URL on Railway to enable Market Days.";}).catch(e=>{$("status").textContent=e.message});})();
+</script>

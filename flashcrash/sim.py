@@ -33,8 +33,11 @@ SEC_LOOKBACK = 45  # trades this long before your own leak count as suspicious
 ALARM_MOVE = 0.04  # a 4% move within ~12s triggers the forensics desk
 HALT_MOVE = 0.12  # a 12% move within ~20s trips the circuit breaker...
 HALT_SECONDS = 8  # ...which halts that stock for a few seconds
+GAME_FREEZE_SECONDS = 8
 CRED_DECAY = 0.55  # each leak multiplies the leaker's credibility by this
 CRED_RECOVERY = 0.5 / 120  # credibility regained per second (half of it in two minutes)
+AUTOPILOT_NEWS_MIN_SECONDS = 45.0
+AUTOPILOT_NEWS_MAX_SECONDS = 75.0
 
 # A scripted 3-minute show for demos and the submission video: (seconds in, headline or None for AI chaos)
 DEMO_SCRIPT = [
@@ -164,13 +167,18 @@ def route_news(text: str, focus: str | None = None) -> list[str]:
 
 
 class Simulation:
-    def __init__(self, brain, n_agents: int = 300, workers: int = 24, seed: int | None = None):
+    def __init__(self, brain, n_agents: int = 300, workers: int = 24, seed: int | None = None,
+                 autopilot_news_min: float = AUTOPILOT_NEWS_MIN_SECONDS,
+                 autopilot_news_max: float = AUTOPILOT_NEWS_MAX_SECONDS):
         self.brain = brain
         self.n_agents = n_agents
         self.n_workers = workers
         self.rng = random.Random(seed)
         self.paused = False
-        self.autopilot = False
+        self.freeze_until = 0.0
+        self.autopilot = True
+        self.autopilot_news_min = max(1.0, autopilot_news_min)
+        self.autopilot_news_max = max(self.autopilot_news_min, autopilot_news_max)
         self.gen = 0
         self.round_end: float | None = None
         self.round_minutes = 0.0
@@ -219,6 +227,7 @@ class Simulation:
         players = [a for a in self.world.agents.values() if a.human and time.time() - a.seen < PLAYER_TIMEOUT]
         self.gen += 1
         self.round_end, self.round_minutes = None, 0.0
+        self.freeze_until = 0.0
         self.world = self._new_world()
         for p in players:  # players keep their seat but get a fresh bankroll
             p.memory.clear()
@@ -251,6 +260,10 @@ class Simulation:
     @property
     def round_over(self) -> bool:
         return self.round_end is None and self.round_minutes > 0
+
+    @property
+    def frozen(self) -> bool:
+        return time.time() < self.freeze_until
 
     # --- market data ------------------------------------------------------
     def market(self, ticker: str | None) -> Market:
@@ -311,7 +324,7 @@ class Simulation:
         while True:
             await asyncio.sleep(1.0)
             for m in self.world.markets.values():
-                if not m.halted:
+                if not self.frozen and not m.halted:
                     self._quote(m, self.analytics(m.stock.ticker).get("volatility", 0) or 0)
 
     def _quote(self, m: Market, vol: float = 0.0) -> None:
@@ -331,12 +344,15 @@ class Simulation:
 
     async def _autopilot_loop(self) -> None:
         while True:
-            await asyncio.sleep(40)
+            await asyncio.sleep(self._next_autopilot_news_delay())
             if self.autopilot and not self.paused:
                 try:
                     await self.newsroom()
                 except Exception:
                     pass
+
+    def _next_autopilot_news_delay(self) -> float:
+        return self.rng.uniform(self.autopilot_news_min, self.autopilot_news_max)
 
     async def _round_loop(self) -> None:
         while True:
@@ -467,7 +483,7 @@ class Simulation:
 
     async def _worker(self) -> None:
         while True:
-            if self.paused:
+            if self.paused or self.frozen:
                 await asyncio.sleep(0.3)
                 continue
             agent = self._pick_agent()
@@ -484,7 +500,7 @@ class Simulation:
                 continue
             finally:
                 agent.busy = False
-            if gen == self.gen and not self.paused and not self.world.markets[ticker].halted:
+            if gen == self.gen and not self.paused and not self.frozen and not self.world.markets[ticker].halted:
                 await self.apply(agent, ticker, decision)
 
     async def apply(self, agent: Agent, ticker: str, d: Decision) -> FeedItem:
@@ -651,9 +667,49 @@ class Simulation:
     async def newsroom(self, ticker: str | None = None) -> NewsItem:
         m = self.world.markets.get(ticker or "") or self.rng.choice(list(self.world.markets.values()))
         ctx = {"ticker": m.stock.ticker, "company": m.stock.company, "blurb": m.stock.blurb, "price": m.price,
-               "change_pct": m.change_pct, "news": [{"text": n.text} for n in self.world.news[-3:]]}
+               "change_pct": m.change_pct, "news": [{"text": n.text} for n in self.world.news[-3:]],
+               "tone": self._newsroom_tone()}
         headline = await self.brain.write_headline(ctx)
         return await self.add_news(headline, "newsroom", "AI newsroom", m.stock.ticker)
+
+    async def preview_news_idea(self, idea: str, ticker: str | None = None) -> dict:
+        m = self.market(ticker)
+        headline = await self.brain.write_headline({
+            "ticker": m.stock.ticker, "company": m.stock.company, "blurb": m.stock.blurb, "price": m.price,
+            "change_pct": m.change_pct, "news": [{"text": n.text} for n in self.world.news[-3:]],
+            "tone": "upbeat", "idea": idea,
+        })
+        mood = sentiment(headline)
+        direction = "up" if mood > 0 else "down" if mood < 0 else "mixed"
+        impact = "high" if abs(mood) >= 0.75 else "moderate" if mood else "unclear"
+        return {"headline": headline, "affected": [{"ticker": t, "direction": direction, "impact": impact}
+                                                     for t in route_news(headline, ticker)]}
+
+    def _newsroom_tone(self) -> str:
+        return self.rng.choices(("upbeat", "neutral", "downside"), weights=(0.7, 0.2, 0.1))[0]
+
+    async def notify_players(self, message: str) -> None:
+        await self._emit({"type": "notification", "message": message})
+
+    async def game_keypad(self, code: str, ticker: str | None = None) -> dict:
+        code = code.upper()
+        if code == "CRASH":
+            m = self.market(ticker)
+            old = m.price
+            m.anchor *= 0.82
+            m.exchange.last_price = round(max(0.01, old * 0.88), 2)
+            m.current.low = min(m.current.low, m.exchange.last_price)
+            m.current.close = m.exchange.last_price
+            self._quote(m)
+            event = {"type": "keypad", "action": "crash", "ticker": m.stock.ticker,
+                     "move_pct": round((m.price / old - 1) * 100, 1)}
+        elif code == "FREEZE":
+            self.freeze_until = time.time() + GAME_FREEZE_SECONDS
+            event = {"type": "keypad", "action": "freeze", "seconds": GAME_FREEZE_SECONDS}
+        else:
+            raise ValueError("unknown keypad code")
+        await self._emit(event)
+        return event
 
     # --- human players ----------------------------------------------------
     def join(self, name: str) -> Agent:
@@ -677,6 +733,8 @@ class Simulation:
             raise KeyError(pid)
         if self.round_over:
             raise ValueError("the round is over, start a new one on the TV")
+        if self.frozen:
+            raise ValueError("trading is frozen by the game keypad. Back in a few seconds!")
         m = self.market(ticker)
         tk = m.stock.ticker
         if m.halted:
@@ -804,6 +862,8 @@ class Simulation:
             "agents": sum(1 for a in w.agents.values() if not a.human),
             "paused": self.paused,
             "autopilot": self.autopilot,
+            "frozen": self.frozen,
+            "freeze_left": max(0, round(self.freeze_until - time.time())),
             "round_left": max(0, round(self.round_end - time.time())) if self.round_end else None,
             "round_minutes": self.round_minutes,
             "round_over": self.round_over,

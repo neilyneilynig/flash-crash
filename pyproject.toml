@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Your family vs. 300 AI traders: a living-room stock market game for Fire TV, Alexa+ (MCP) and phones."
 requires-python = ">=3.12"
 dependencies = [
+    "asyncpg>=0.32.0",
     "fastapi>=0.143.0",
     "httpx>=0.28.1",
     "mcp>=2.3.0",

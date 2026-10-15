@@ -41,7 +41,13 @@
         <button class="btn" data-act="toggle_pause" id="btn-pause">⏸ Pause</button>
         <button class="btn round" data-act="start_round">🏁 5-min round</button>
         <button class="btn" data-act="reset">🔄 Reset</button>
+        <button class="btn" data-act="notify">📣 Notify phones</button>
       </nav>
+      <div id="notify-form" class="hidden">
+        <input id="notify-text" maxlength="160" placeholder="Message for every player…">
+        <button id="notify-send">Send to phones</button>
+        <button id="notify-cancel">Cancel</button>
+      </div>
     </section>
 
     <aside id="right">

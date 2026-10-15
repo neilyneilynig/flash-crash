@@ -54,6 +54,9 @@
   .cred .meter { height: 8px; border-radius: 4px; background: #2a3342; margin: 6px 0 4px; overflow: hidden; }
   .cred .meter i { display: block; height: 100%; border-radius: 4px; transition: width .5s, background .5s; }
   @keyframes hot { 50% { background: #3a2a06; } }
+  .live-news { display: flex; align-items: flex-start; gap: 7px; margin: -2px 0 12px; padding: 10px 12px; background: #1b1a10; border: 1px solid #5a4b12; border-radius: 12px; font-size: 14px; line-height: 1.35; }
+  .live-news b { flex: 0 0 auto; color: #000; background: var(--accent); font-size: 10px; padding: 2px 6px; border-radius: 4px; letter-spacing: 1px; }
+  .live-news.flash { animation: flash 1.2s ease-out; }
 
   /* quote */
   .quote { display: flex; justify-content: space-between; align-items: flex-end; gap: 10px; }
@@ -105,12 +108,22 @@
   .about { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
   .about span { color: var(--dim); font-size: 14px; white-space: nowrap; }
   .about select { padding: 10px; font-size: 15px; }
+  .preview { margin-top: 10px; padding: 12px; background: #121c29; border: 1px solid #365070; border-radius: 12px; font-size: 14px; line-height: 1.4; }
+  .preview b { color: var(--accent); }
+  .preview .who { display: block; margin-top: 5px; }
+  .keypad { border-color: #5a4b12; background: #1b1a10; }
+  .keypad .row { align-items: center; }
+  .keypad input { flex: 1; text-transform: uppercase; }
+  .keypad button { flex: 0 0 auto; padding: 12px 14px; font-size: 14px; }
 
   /* lists */
   ul.list { list-style: none; margin: 0; padding: 0; }
   ul.list li { padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 14px; line-height: 1.35; animation: tin .3s ease-out; }
   ul.list li:last-child { border-bottom: 0; }
   .who { color: var(--dim); font-size: 12px; }
+  .section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .section-head .label { margin-bottom: 10px; }
+  .live { color: var(--up); font-size: 11px; font-weight: 800; letter-spacing: .8px; text-transform: uppercase; }
   .act { font-weight: 800; font-size: 12px; margin-left: 6px; }
   .tkr { color: var(--accent); font-weight: 800; font-size: 12px; margin-left: 6px; }
   li.human { background: #22200c; margin: 0 -8px; padding: 9px 8px !important; border-radius: 8px; }
@@ -199,8 +212,9 @@
       <div><b id="cash">–</b><small>Cash</small></div>
     </div>
     <div class="stocks" id="stocks"></div>
+      <div class="live-news hidden" id="live-news"><b>NEWS</b><span id="live-news-text"></span></div>
 
-    <!-- TRADE -->
+      <!-- TRADE -->
     <section id="tab-trade">
       <div class="card">
         <div class="quote">
@@ -232,6 +246,7 @@
         <div class="est"><span id="est">–</span><span id="avail">–</span></div>
         <div class="row"><button class="buy bigbtn" id="buy">BUY</button><button class="sell bigbtn" id="sell">SELL</button></div>
         <div class="halted-note hidden" id="halted-note">⛔ Circuit breaker: trading halted for a few seconds</div>
+        <div class="halted-note hidden" id="frozen-note">🧊 Game keypad freeze: all trading pauses briefly</div>
         <button class="sellall" id="sellall">Dump all my shares</button>
       </div>
     </section>
@@ -245,6 +260,9 @@
           <button class="mic" id="mic" title="Speak a headline">🎤</button>
         </div>
         <div class="about"><span>About</span><select id="about"></select></div>
+        <button class="ghost" id="shape-idea" style="width:100%;margin-top:8px">✨ Shape this idea with AI</button>
+        <div class="preview hidden" id="idea-preview"><b>AI draft</b><div id="idea-headline"></div><span class="who" id="idea-impact"></span>
+          <button class="primary" id="publish-idea">📰 Review complete — publish this headline</button></div>
         <button class="primary" id="leak">📰 Leak it to the market</button>
         <div class="chips" id="chips"></div>
         <button class="ghost" id="chaos" style="width:100%;margin-top:8px">🎲 Let the AI newsroom write one</button>
@@ -255,6 +273,11 @@
       <div class="card">
         <p class="label">Your leaks</p>
         <ul class="list" id="my-leaks"><li class="who">Nothing leaked yet. Name a company to move its stock.</li></ul>
+      </div>
+      <div class="card keypad">
+        <p class="label">🎮 Party game keypad</p>
+        <p class="who" style="margin-top:0">For this game only: <b>CRASH</b> triggers a sell-off in the selected stock; <b>FREEZE</b> pauses all trading briefly. Everyone sees the result.</p>
+        <div class="row"><input id="keypad-code" maxlength="6" placeholder="Enter CRASH or FREEZE" autocomplete="off"><button class="ghost" id="keypad-go">Activate</button></div>
       </div>
     </section>
 
@@ -276,7 +299,7 @@
     <!-- PORTFOLIO -->
     <section id="tab-me" class="hidden">
       <div class="card">
-        <p class="label">💼 Your positions</p>
+        <div class="section-head"><p class="label">💼 Your holdings</p><span class="live" id="portfolio-live">Live prices</span></div>
         <table><thead><tr><th>Stock</th><th>Shares</th><th>Avg</th><th>Value</th><th>P&amp;L</th></tr></thead><tbody id="positions"></tbody></table>
       </div>
       <div class="card">
@@ -357,7 +380,7 @@
   var store = function (k, v) { try { if (v !== undefined) localStorage.setItem(k, JSON.stringify(v)); return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } };
   var me = store("fc_player");
   var sel = store("fc_stock") || "GPU";
-  var markets = [], byT = {}, port = null;
+  var markets = [], byT = {}, port = null, gameFrozen = false;
   var TZ = -new Date().getTimezoneOffset() * 60; // chart library renders UTC
 
   function toast(t) { var el = $("toast"); el.textContent = t; el.classList.add("show"); clearTimeout(el._t); el._t = setTimeout(function () { el.classList.remove("show"); }, 2400); }
@@ -413,7 +436,8 @@
     lastPx[sel] = m.price;
     $("q-ch").textContent = sign(m.change_pct, 2) + "% today";
     $("halted-note").classList.toggle("hidden", !m.halted);
-    $("buy").disabled = $("sell").disabled = $("sellall").disabled = !!m.halted;
+    $("frozen-note").classList.toggle("hidden", !gameFrozen);
+    $("buy").disabled = $("sell").disabled = $("sellall").disabled = !!m.halted || gameFrozen;
     $("q-ch").className = "ch " + (m.change_pct >= 0 ? "up" : "down");
     var p = pos(sel);
     $("q-pos").innerHTML = p && p.shares
@@ -446,9 +470,13 @@
   function renderPositions() {
     if (!port) return;
     $("positions").innerHTML = port.positions.map(function (x) {
+      var price = byT[x.ticker] ? byT[x.ticker].price : x.price;
+      var value = x.shares * price;
+      var pnl = x.avg_cost ? (price / x.avg_cost - 1) * 100 : null;
       return "<tr class='" + (x.ticker === sel ? "sel" : "") + "'><td>$" + x.ticker + "</td><td>" + x.shares + "</td><td>" + (x.avg_cost ? fmt(x.avg_cost, 2) : "–") +
-        "</td><td>" + money(x.value) + "</td><td class='" + ((x.pnl_pct || 0) >= 0 ? "up" : "down") + "'>" + (x.pnl_pct != null ? sign(x.pnl_pct, 1) + "%" : "–") + "</td></tr>";
+        "</td><td>" + money(value) + "</td><td class='" + (pnl != null && pnl >= 0 ? "up" : "down") + "'>" + (pnl != null ? sign(pnl, 1) + "%" : "–") + "</td></tr>";
     }).join("") + "<tr><td>Cash</td><td></td><td></td><td>" + money(port.cash) + "</td><td></td></tr>";
+    $("portfolio-live").textContent = "Live · " + new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
     var h = port.trades.slice(-12).reverse();
     $("history").innerHTML = h.length ? h.map(function (t) {
       return "<li><span class='act " + (t.side === "buy" ? "up" : "down") + "' style='margin:0'>" + t.side.toUpperCase() + " " + t.qty +
@@ -730,11 +758,13 @@
     $("about").value = sel;
   }
   var leaks = [];
+  var ideaPreview = null;
   function leak(text, ticker) {
     if (!text.trim()) return toast("Write a headline first");
     post("/api/news", { text: text, author: me.name, source: source, ticker: ticker || null, player_id: me.id })
       .then(function (n) {
         $("headline").value = ""; source = "crowd";
+        ideaPreview = null; $("idea-preview").classList.add("hidden");
         buzz([20, 40, 20]);
         toast("📰 Leaked! Watch the TV.");
         var l = { text: n.text, tickers: n.tickers, prices: n.prices, result: null };
@@ -762,8 +792,30 @@
     }).join("");
   }
   $("leak").onclick = function () { leak($("headline").value, $("about").value); };
+  $("shape-idea").onclick = function () {
+    var idea = $("headline").value.trim();
+    if (!idea) return toast("Write a news idea first");
+    post("/api/news/preview", { idea: idea, ticker: $("about").value || null }).then(function (draft) {
+      ideaPreview = draft;
+      $("idea-headline").textContent = draft.headline;
+      $("idea-impact").textContent = "Likely impact: " + draft.affected.map(function (a) {
+        return "$" + a.ticker + " " + a.direction + " · " + a.impact;
+      }).join("  ·  ");
+      $("idea-preview").classList.remove("hidden");
+    }).catch(function (e) { toast(e.message); });
+  };
+  $("publish-idea").onclick = function () {
+    if (ideaPreview) leak(ideaPreview.headline, $("about").value);
+  };
   $("chaos").onclick = function () {
     post("/api/news/chaos", { ticker: sel }).then(function (n) { toast("🎲 " + n.text); }).catch(function (e) { toast(e.message); });
+  };
+  $("keypad-go").onclick = function () {
+    var code = $("keypad-code").value.trim().toUpperCase();
+    if (!code) return toast("Enter a party game code");
+    post("/api/control", { action: "keypad", code: code, ticker: $("about").value || sel }).then(function () {
+      $("keypad-code").value = "";
+    }).catch(function (e) { toast(e.message); });
   };
   var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) $("mic").style.display = "none";
@@ -789,11 +841,19 @@
     newsT.push(n); newsT = newsT.slice(-30);
     n.tickers.forEach(function (t) { hotT[t] = Date.now(); });
     renderNewsList();
+    var prefix = n.tickers.length < markets.length ? n.tickers.map(function (t) { return "$" + t; }).join(" ") + ": " : "";
+    $("live-news-text").textContent = prefix + n.text;
+    var banner = $("live-news");
+    banner.classList.remove("hidden");
+    if (fresh) { banner.classList.remove("flash"); void banner.offsetWidth; banner.classList.add("flash"); }
     if (n.tickers.indexOf(sel) >= 0) {
-      $("news-text").textContent = (n.tickers.length < markets.length ? n.tickers.map(function (t) { return "$" + t; }).join(" ") + ": " : "") + n.text;
+      $("news-text").textContent = prefix + n.text;
       if (fresh) { var el = $("news"); el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash"); }
     }
-    if (fresh) { showMine(); renderStocks(); }
+    if (fresh) {
+      showMine(); renderStocks();
+      if (tab !== "feed") $("feed-dot").classList.remove("hidden");
+    }
   }
   function renderNewsList() {
     $("newslist").innerHTML = newsT.slice(-5).reverse().map(function (n) {
@@ -924,9 +984,11 @@
   // ---------------------------------------------------------------- live data
   function snapshot(s) {
     markets = s.markets; byT = {};
+    gameFrozen = !!s.frozen;
     markets.forEach(function (m) { byT[m.ticker] = m; });
     if (!byT[sel]) sel = markets[0].ticker;
     renderStocks(); renderQuote(); renderBoards(s); renderClock(s);
+    renderPositions();
     Object.keys(s.current || {}).forEach(function (t) { pushCandle(t, s.current[t], true); });
     if (Date.now() - lastDraw > 4000) redraw(false); // keep indicators fresh when candles are quiet
   }
@@ -950,6 +1012,11 @@
       else if (m.type === "round_over") roundOver(m.data);
       else if (m.type === "explain") showWhy(m.item);
       else if (m.type === "sec") showSec(m.item);
+      else if (m.type === "notification") toast("📣 " + m.message);
+      else if (m.type === "keypad") {
+        if (m.action === "crash") toast("🎮 CRASH: $" + m.ticker + " " + sign(m.move_pct, 1) + "%");
+        else toast("🧊 FREEZE: trading paused for " + m.seconds + " seconds");
+      }
       else if (m.type === "halt") { toast("⛔ $" + m.ticker + " halted: moved " + sign(m.move_pct, 1) + "% too fast"); buzz([60, 60, 60]); }
       else if (m.type === "feed" && m.item.action !== "hold" && m.item.qty > 0 && (m.item.thought || m.item.human)) {
         queue.push(m.item);

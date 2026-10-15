@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import FileResponse, RedirectResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from mcp.server.transport_security import TransportSecuritySettings  # noqa: E402
@@ -21,14 +22,22 @@ from pydantic import BaseModel  # noqa: E402
 
 from .brain import make_brain  # noqa: E402
 from .mcp_server import build_mcp  # noqa: E402
+from .market_days import MarketDays, MarketDaysError  # noqa: E402
 from .news import tavily_headlines  # noqa: E402
 from .sim import Simulation  # noqa: E402
 
 STATIC = Path(__file__).parent / "static"
 
 brain = make_brain(int(os.getenv("CONCURRENCY", "24")))
-sim = Simulation(brain, n_agents=int(os.getenv("AGENTS", "300")), workers=int(os.getenv("CONCURRENCY", "24")))
+sim = Simulation(
+    brain,
+    n_agents=int(os.getenv("AGENTS", "300")),
+    workers=int(os.getenv("CONCURRENCY", "24")),
+    autopilot_news_min=float(os.getenv("AUTOPILOT_NEWS_MIN_SECONDS", "45")),
+    autopilot_news_max=float(os.getenv("AUTOPILOT_NEWS_MAX_SECONDS", "75")),
+)
 mcp = build_mcp(sim)
+market_days = MarketDays.from_env()
 
 
 def lan_ip() -> str:
@@ -82,16 +91,22 @@ async def _push_snapshots():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await brain.resolve_models()
+    if market_days.enabled:
+        await market_days.start()
     sim.listeners.append(hub.send_all)
     sim.start()
     pusher = asyncio.create_task(_push_snapshots())
     async with mcp.session_manager.run():
         yield
     pusher.cancel()
+    await market_days.stop()
     await sim.stop()
 
 
 app = FastAPI(title="Flash Crash", lifespan=lifespan)
+days_origins = [origin.strip() for origin in os.getenv("MARKET_DAYS_ALLOWED_ORIGINS", "").split(",") if origin.strip()]
+if days_origins:
+    app.add_middleware(CORSMiddleware, allow_origins=days_origins, allow_methods=["*"], allow_headers=["*"])
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
@@ -108,6 +123,11 @@ def tv():
 @app.get("/play")
 def play():
     return FileResponse(STATIC / "play.html")
+
+
+@app.get("/days")
+def days():
+    return FileResponse(STATIC / "market_days.html")
 
 
 @app.get("/api/info")
@@ -128,6 +148,64 @@ class NewsIn(BaseModel):
     author: str = "anon"
     ticker: str | None = None  # the stock the leaker was looking at
     player_id: str | None = None  # lets the AI SEC check the leaker's trades
+
+
+class NewsIdeaIn(BaseModel):
+    idea: str
+    ticker: str | None = None
+
+
+@app.post("/api/news/preview")
+async def preview_news(body: NewsIdeaIn):
+    idea = " ".join(body.idea.split())[:160]
+    if not idea:
+        raise HTTPException(400, "empty news idea")
+    return await sim.preview_news_idea(idea, body.ticker)
+
+
+class DaysGameIn(BaseModel):
+    name: str = "Market Day"
+    symbols: list[str] = ["SPY", "AAPL", "NVDA"]
+
+
+class DaysCycleIn(BaseModel):
+    symbol: str
+
+
+def _days_error(exc: MarketDaysError):
+    raise HTTPException(503, str(exc))
+
+
+@app.get("/api/days/config")
+async def days_config():
+    return {"enabled": market_days.enabled, "paper_trading": market_days.alpaca is not None,
+            "default_symbols": ["SPY", "AAPL", "NVDA"]}
+
+
+@app.post("/api/days/games")
+async def create_days_game(body: DaysGameIn):
+    try:
+        return await market_days.create_game(body.name, body.symbols)
+    except MarketDaysError as exc:
+        _days_error(exc)
+
+
+@app.get("/api/days/games/{game_id}")
+async def days_game(game_id: str):
+    try:
+        return await market_days.state(game_id)
+    except (MarketDaysError, ValueError) as exc:
+        _days_error(exc if isinstance(exc, MarketDaysError) else MarketDaysError("invalid game id"))
+
+
+@app.post("/api/days/games/{game_id}/ai-cycle")
+async def days_ai_cycle(game_id: str, body: DaysCycleIn):
+    try:
+        event = await market_days.ai_cycle(game_id, body.symbol)
+    except (MarketDaysError, ValueError) as exc:
+        _days_error(exc if isinstance(exc, MarketDaysError) else MarketDaysError("invalid game id"))
+    await hub.send_all({"type": "market_days", "game_id": game_id, "event": event})
+    return event
 
 
 @app.post("/api/news")
@@ -169,6 +247,9 @@ async def real_news(body: RealIn):
 class ControlIn(BaseModel):
     action: str
     minutes: float = 5
+    message: str = ""
+    code: str = ""
+    ticker: str | None = None
 
 
 @app.post("/api/control")
@@ -192,6 +273,16 @@ async def control(body: ControlIn):
         await hub.send_all({"type": "reset", "data": {**sim.snapshot(), **sim.history()}})
     elif a == "toggle_autopilot":
         sim.autopilot = not sim.autopilot
+    elif a == "notify":
+        message = " ".join(body.message.split())[:160]
+        if not message:
+            raise HTTPException(400, "empty notification")
+        await sim.notify_players(message)
+    elif a == "keypad":
+        code = body.code.strip().upper()
+        if code not in ("CRASH", "FREEZE"):
+            raise HTTPException(400, "unknown game keypad code")
+        await sim.game_keypad(code, body.ticker)
     else:
         raise HTTPException(400, "unknown action")
     return {"ok": True, "paused": sim.paused, "autopilot": sim.autopilot}

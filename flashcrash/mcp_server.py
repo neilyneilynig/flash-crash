@@ -91,7 +91,8 @@ def build_mcp(sim: Simulation) -> MCPServer:
     @mcp.tool(title="Control game")
     async def control(action: str, minutes: float = 5) -> dict:
         """Control the game: 'start_round' (timed round, default 5 minutes, fresh bankrolls), 'demo' (3-minute scripted
-        show), 'pause', 'resume', 'reset' (new free-play market), 'autopilot_on' or 'autopilot_off' (AI news every ~40s)."""
+        show), 'pause', 'resume', 'reset' (new free-play market), 'autopilot_on' or 'autopilot_off' (AI news is on by
+        default and arrives at randomized intervals)."""
         if action == "pause":
             sim.paused = True
         elif action == "resume":

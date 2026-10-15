@@ -103,6 +103,117 @@ def test_news_routing(text, focus, expected):
     assert route_news(text, focus) == expected
 
 
+def test_news_emits_player_websocket_payload():
+    async def run():
+        sim = Simulation(MockBrain(random.Random(7)), n_agents=1, workers=1, seed=7)
+        events = []
+
+        async def listen(event):
+            events.append(event)
+
+        sim.listeners.append(listen)
+        item = await sim.add_news("GPU wins a giant contract", "newsroom", "AI newsroom")
+        return item, events
+
+    item, events = asyncio.run(run())
+    assert events == [{"type": "news", "item": item.as_dict()}]
+
+
+def test_autopilot_news_is_enabled_and_randomized():
+    sim = Simulation(MockBrain(random.Random(8)), n_agents=1, workers=1, seed=8,
+                     autopilot_news_min=45, autopilot_news_max=75)
+    delays = [sim._next_autopilot_news_delay() for _ in range(4)]
+    assert sim.autopilot
+    assert all(45 <= delay <= 75 for delay in delays)
+    assert len(set(delays)) > 1
+
+
+def test_mock_newsroom_favors_requested_upbeat_tone():
+    async def run():
+        brain = MockBrain(random.Random(11))
+        ctx = {"ticker": "GPU", "company": "Green Processing Unlimited"}
+        return [await brain.write_headline({**ctx, "tone": "upbeat"}) for _ in range(20)]
+
+    from flashcrash.brain import sentiment
+
+    assert all(sentiment(headline) > 0 for headline in asyncio.run(run()))
+
+
+def test_news_idea_preview_does_not_publish():
+    async def run():
+        sim = Simulation(MockBrain(random.Random(12)), n_agents=1, workers=1, seed=12)
+        events = []
+
+        async def listen(event):
+            events.append(event)
+
+        sim.listeners.append(listen)
+        draft = await sim.preview_news_idea("lands a breakthrough contract", "GPU")
+        return sim, draft, events
+
+    sim, draft, events = asyncio.run(run())
+    assert draft["headline"] == "Green Processing Unlimited: Lands a breakthrough contract"
+    assert draft["affected"] == [{"ticker": "GPU", "direction": "up", "impact": "high"}]
+    assert not sim.world.news and not events
+
+
+def test_game_keypad_crashes_selected_stock_and_freezes_trading():
+    async def run():
+        sim = Simulation(MockBrain(random.Random(13)), n_agents=1, workers=1, seed=13)
+        events = []
+
+        async def listen(event):
+            events.append(event)
+
+        sim.listeners.append(listen)
+        player = sim.join("Arcade")
+        start = sim.market("MEME").price
+        crash = await sim.game_keypad("CRASH", "MEME")
+        await sim.game_keypad("FREEZE")
+        with pytest.raises(ValueError, match="frozen"):
+            await sim.human_trade(player.id, "buy", 1, "GPU")
+        return sim, events, start, crash
+
+    sim, events, start, crash = asyncio.run(run())
+    assert crash["ticker"] == "MEME" and crash["move_pct"] < 0
+    assert sim.market("MEME").price < start and sim.frozen
+    assert [event["action"] for event in events] == ["crash", "freeze"]
+
+
+def test_newsroom_uses_news_websocket_event():
+    async def run():
+        sim = Simulation(MockBrain(random.Random(9)), n_agents=1, workers=1, seed=9)
+        events = []
+
+        async def listen(event):
+            events.append(event)
+
+        sim.listeners.append(listen)
+        await sim.newsroom("GPU")
+        return events
+
+    events = asyncio.run(run())
+    assert len(events) == 1
+    assert events[0]["type"] == "news"
+    assert events[0]["item"]["source"] == "newsroom"
+    assert events[0]["item"]["tickers"] == ["GPU"]
+
+
+def test_player_notification_uses_websocket_event():
+    async def run():
+        sim = Simulation(MockBrain(random.Random(10)), n_agents=1, workers=1, seed=10)
+        events = []
+
+        async def listen(event):
+            events.append(event)
+
+        sim.listeners.append(listen)
+        await sim.notify_players("Round starts in one minute")
+        return events
+
+    assert asyncio.run(run()) == [{"type": "notification", "message": "Round starts in one minute"}]
+
+
 def test_mock_chatter_is_varied():
     async def run():
         sim = Simulation(MockBrain(random.Random(1)), n_agents=60, workers=12, seed=1)
