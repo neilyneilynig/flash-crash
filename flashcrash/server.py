@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import secrets
 import socket
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -13,7 +14,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect  # noqa: E402
+from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import FileResponse, RedirectResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
@@ -22,7 +23,7 @@ from pydantic import BaseModel  # noqa: E402
 
 from .brain import make_brain  # noqa: E402
 from .mcp_server import build_mcp  # noqa: E402
-from .market_days import MarketDays, MarketDaysError  # noqa: E402
+from .market_days import MarketDays, MarketDaysError, MarketDaysInputError  # noqa: E402
 from .news import tavily_headlines  # noqa: E402
 from .sim import Simulation  # noqa: E402
 
@@ -37,7 +38,7 @@ sim = Simulation(
     autopilot_news_max=float(os.getenv("AUTOPILOT_NEWS_MAX_SECONDS", "75")),
 )
 mcp = build_mcp(sim)
-market_days = MarketDays.from_env()
+market_days = MarketDays.from_env(brain)
 
 
 def lan_ip() -> str:
@@ -91,8 +92,15 @@ async def _push_snapshots():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await brain.resolve_models()
-    if market_days.enabled:
+    async def days_push(game_id, event):  # live updates for /days on the shared WebSocket
+        await hub.send_all({"type": "market_days", "game_id": game_id, "event": event})
+
+    market_days.listeners.append(days_push)
+    try:
         await market_days.start()
+    except MarketDaysError as exc:  # a bad DATABASE_URL must never take the party game down
+        print(f"Market Days disabled: {exc}")
+        market_days.enabled = False
     sim.listeners.append(hub.send_all)
     sim.start()
     pusher = asyncio.create_task(_push_snapshots())
@@ -169,21 +177,54 @@ class DaysGameIn(BaseModel):
 
 
 class DaysCycleIn(BaseModel):
+    symbol: str | None = None
+
+
+class DaysJoinIn(BaseModel):
+    name: str
+
+
+class DaysTradeIn(BaseModel):
+    player_id: str
     symbol: str
+    side: str
+    qty: int
 
 
-def _days_error(exc: MarketDaysError):
-    raise HTTPException(503, str(exc))
+def _days_error(exc: Exception):
+    if isinstance(exc, MarketDaysInputError):
+        raise HTTPException(400, str(exc))
+    raise HTTPException(503, str(exc) if isinstance(exc, MarketDaysError) else "Market Days request failed")
+
+
+def _days_operator(token: str | None) -> None:
+    """Creating games and running AI cycles place orders on the Alpaca paper account, so on a public deployment they
+    need MARKET_DAYS_ADMIN_TOKEN (sent as X-Admin-Token). Without Alpaca keys (simulated quotes) they stay open."""
+    want = os.getenv("MARKET_DAYS_ADMIN_TOKEN", "")
+    if want:
+        if not secrets.compare_digest(token or "", want):
+            raise HTTPException(401, "operator token required (X-Admin-Token)")
+    elif market_days.alpaca is not None:
+        raise HTTPException(403, "set MARKET_DAYS_ADMIN_TOKEN to allow AI paper orders through the API")
 
 
 @app.get("/api/days/config")
 async def days_config():
-    return {"enabled": market_days.enabled, "paper_trading": market_days.alpaca is not None,
-            "default_symbols": ["SPY", "AAPL", "NVDA"]}
+    return {**market_days.config(), "operator_token_required": bool(os.getenv("MARKET_DAYS_ADMIN_TOKEN"))
+            or market_days.alpaca is not None}
+
+
+@app.get("/api/days/games")
+async def days_games():
+    try:
+        return await market_days.games()
+    except MarketDaysError as exc:
+        _days_error(exc)
 
 
 @app.post("/api/days/games")
-async def create_days_game(body: DaysGameIn):
+async def create_days_game(body: DaysGameIn, x_admin_token: str | None = Header(None)):
+    _days_operator(x_admin_token)
     try:
         return await market_days.create_game(body.name, body.symbols)
     except MarketDaysError as exc:
@@ -194,18 +235,33 @@ async def create_days_game(body: DaysGameIn):
 async def days_game(game_id: str):
     try:
         return await market_days.state(game_id)
-    except (MarketDaysError, ValueError) as exc:
-        _days_error(exc if isinstance(exc, MarketDaysError) else MarketDaysError("invalid game id"))
+    except MarketDaysError as exc:
+        _days_error(exc)
+
+
+@app.post("/api/days/games/{game_id}/join")
+async def days_join(game_id: str, body: DaysJoinIn):
+    try:
+        return await market_days.join(game_id, body.name)
+    except MarketDaysError as exc:
+        _days_error(exc)
+
+
+@app.post("/api/days/games/{game_id}/trade")
+async def days_trade(game_id: str, body: DaysTradeIn):
+    try:
+        return await market_days.trade(game_id, body.player_id, body.symbol, body.side, body.qty)
+    except MarketDaysError as exc:
+        _days_error(exc)
 
 
 @app.post("/api/days/games/{game_id}/ai-cycle")
-async def days_ai_cycle(game_id: str, body: DaysCycleIn):
+async def days_ai_cycle(game_id: str, body: DaysCycleIn, x_admin_token: str | None = Header(None)):
+    _days_operator(x_admin_token)
     try:
-        event = await market_days.ai_cycle(game_id, body.symbol)
-    except (MarketDaysError, ValueError) as exc:
-        _days_error(exc if isinstance(exc, MarketDaysError) else MarketDaysError("invalid game id"))
-    await hub.send_all({"type": "market_days", "game_id": game_id, "event": event})
-    return event
+        return await market_days.ai_cycle(game_id, body.symbol)
+    except MarketDaysError as exc:
+        _days_error(exc)
 
 
 @app.post("/api/news")

@@ -70,8 +70,9 @@ LISTING = "\n".join(f"- ${st.ticker}: {st.company}, {st.blurb}" for st in STOCKS
 def build_messages(agent: Agent, ctx: dict) -> list[dict]:
     a = agent.archetype
     tk = ctx["ticker"]
-    fair = f" You privately think ${tk} is worth about ${ctx['fair'] * BY_TICKER[tk].price:.2f}." if a.value > 0 else ""
-    system = SYSTEM.format(name=agent.name, handle=agent.handle, listing=LISTING, persona=a.description + fair,
+    ref = BY_TICKER[tk].price if tk in BY_TICKER else ctx.get("ref_price", ctx["price"])  # real stocks: recent average
+    fair = f" You privately think ${tk} is worth about ${ctx['fair'] * ref:.2f}." if a.value > 0 else ""
+    system = SYSTEM.format(name=agent.name, handle=agent.handle, listing=ctx.get("listing", LISTING), persona=a.description + fair,
                            quirk=agent.quirk or "plain", ticker=tk)
     news = "\n".join(f"- [{n['age']}s ago] {n['text']}" + (f" (leaked by {n['author']}, who keeps leaking news; "
                       f"credibility {n['cred']:.0%})" if n.get("cred", 1) < 0.8 else "")

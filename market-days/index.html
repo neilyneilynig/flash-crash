@@ -1,4 +1,261 @@
-<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Market Days</title>
-<style>body{margin:0;background:#07100c;color:#d8e7dc;font:15px ui-monospace,monospace}.s{max-width:900px;margin:auto;padding:24px}h1{color:#65ff9b}.p{border:1px solid #244b37;background:#0b1811;padding:14px;margin-top:14px}input,button{padding:10px;background:#061009;color:#d8e7dc;border:1px solid #315c43;font:inherit}button{background:#65ff9b;color:#07100c;font-weight:bold}table{width:100%;border-collapse:collapse}td,th{padding:8px;border-bottom:1px solid #1c3929;text-align:left}.hide{display:none}.err{color:#ff8f8f}</style>
-<main class=s><h1>MARKET DAYS</h1><p>Persistent Alpaca paper-market sessions.</p><div class=p><input id=n value="Market Day"><input id=s value="SPY,AAPL,NVDA"><button id=c>Create session</button></div><div id=m class=p>Loading configuration…</div><section id=g class=hide><div class=p><b id=t></b> <button id=a>Run AI paper cycle</button><table><thead><tr><th>Symbol</th><th>Bid</th><th>Ask</th></tr></thead><tbody id=q></tbody></table></div><pre id=e class=p></pre></section></main>
-<script>(async()=>{const $=x=>document.getElementById(x);let base="",game;try{base=(await (await fetch("/api/config")).json()).apiBase}catch(_){};if(!base){$("m").className="p err";$("m").textContent="Set MARKET_DAYS_API_URL in Vercel.";return}const api=async(p,o)=>{let r=await fetch(base+p,o),j=await r.json();if(!r.ok)throw Error(j.detail);return j};const paint=x=>{$("t").textContent=x.name+" · "+x.status;$("q").innerHTML=(x.quotes||[]).map(v=>`<tr><td>${v.symbol}</td><td>${v.bid}</td><td>${v.ask}</td></tr>`).join("");$("e").textContent=(x.events||[]).map(v=>v.kind+" "+JSON.stringify(v.payload)).join("\n")||"No events.";$("g").className=""};$("c").onclick=async()=>{try{game=await api("/api/days/games",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:$("n").value,symbols:$("s").value.split(",")})});paint(await api("/api/days/games/"+game.id))}catch(e){$("m").className="p err";$("m").textContent=e.message}};$("a").onclick=async()=>{try{await api("/api/days/games/"+game.id+"/ai-cycle",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({symbol:game.symbols[0]})});paint(await api("/api/days/games/"+game.id))}catch(e){$("m").className="p err";$("m").textContent=e.message}};let c=await api("/api/days/config");$("m").textContent=c.enabled?"Ready. "+(c.paper_trading?"Alpaca paper trading configured.":"Configure Alpaca to trade."):"Configure DATABASE_URL on Railway.";})();</script>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Market Days</title>
+<!-- Served by the backend at /days and, as an identical copy, by Vercel from market-days/index.html.
+     On Vercel, /api/config supplies the backend URL; on the backend itself, the page talks to its own origin. -->
+<style>
+:root { color-scheme: dark; --g: #65ff9b; --dim: #8aa394; --line: #1c3929; --red: #ff8f8f; --amber: #ffd479; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #07100c; color: #d8e7dc; font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.shell { max-width: 1180px; margin: auto; padding: 20px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 18px; }
+h1 { color: var(--g); margin: 0; letter-spacing: 2px; }
+.sub { color: var(--dim); }
+.chips { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { border: 1px solid #315c43; padding: 3px 8px; font-size: 12px; color: var(--dim); }
+.chip.ok { color: var(--g); border-color: #2f7a4d; } .chip.warn { color: var(--amber); border-color: #6b5a24; }
+.panel { border: 1px solid #244b37; background: #0b1811; padding: 14px; margin-top: 14px; }
+.panel h2 { margin: 0 0 10px; font-size: 13px; color: var(--dim); letter-spacing: 2px; text-transform: uppercase; font-weight: normal; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+input, select, button { font: inherit; padding: 9px 10px; border: 1px solid #315c43; background: #061009; color: #d8e7dc; }
+button { color: #07100c; background: var(--g); font-weight: bold; cursor: pointer; border-color: var(--g); }
+button.sell { background: var(--red); border-color: var(--red); }
+button.ghost { background: none; color: var(--g); }
+button:disabled { opacity: .45; cursor: default; }
+table { width: 100%; border-collapse: collapse; }
+td, th { padding: 7px 8px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--dim); font-weight: normal; font-size: 12px; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.up { color: var(--g); } .down { color: var(--red); } .dim { color: var(--dim); } .err { color: var(--red); }
+.grid { display: grid; grid-template-columns: 1.15fr 1fr; gap: 14px; }
+@media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+.games button { margin: 0 6px 6px 0; }
+.me { background: #10261a; }
+.feed { max-height: 460px; overflow: auto; }
+.ev { padding: 9px 0; border-bottom: 1px solid var(--line); line-height: 1.45; }
+.ev .t { color: var(--dim); font-size: 12px; float: right; }
+.ev .act { font-weight: bold; }
+.hidden { display: none !important; }
+#status:empty { display: none; }
+</style>
+</head>
+<body>
+<main class="shell">
+  <header>
+    <h1>MARKET DAYS</h1>
+    <span class="sub">real stocks · you vs an AI trading desk · paper money only</span>
+    <span class="chips" id="chips"></span>
+  </header>
+  <div id="status" class="panel err"></div>
+
+  <section class="panel" id="lobby">
+    <h2>Games</h2>
+    <div class="games" id="games"><span class="dim">Loading…</span></div>
+    <div class="row" style="margin-top:8px">
+      <input id="name" value="Market Day" aria-label="game name" size="16">
+      <input id="symbols" value="SPY,AAPL,NVDA" aria-label="symbols" size="22">
+      <input id="token" class="hidden" type="password" placeholder="operator token" aria-label="operator token" size="16">
+      <button id="create">Create game</button>
+    </div>
+  </section>
+
+  <section id="game" class="hidden">
+    <div class="panel">
+      <div class="row"><b id="title" style="font-size:16px"></b><span class="dim" id="meta"></span>
+        <button class="ghost" id="share" style="margin-left:auto">Copy link</button></div>
+    </div>
+    <div class="grid">
+      <div>
+        <div class="panel">
+          <h2>Quotes</h2>
+          <table><thead><tr><th>Symbol</th><th class="num">Bid</th><th class="num">Ask</th><th class="num">Mid</th></tr></thead><tbody id="quotes"></tbody></table>
+        </div>
+        <div class="panel">
+          <h2>Leaderboard</h2>
+          <table><thead><tr><th>#</th><th>Trader</th><th class="num">Equity</th><th class="num">P&amp;L</th><th>Holdings</th></tr></thead><tbody id="board"></tbody></table>
+        </div>
+        <div class="panel" id="desk">
+          <h2>Your desk</h2>
+          <div id="join-row" class="row"><input id="me-name" placeholder="your name" size="16"><button id="join">Join this game</button></div>
+          <div id="ticket" class="hidden">
+            <div class="row" style="margin-bottom:10px"><span>Cash <b id="me-cash"></b></span><span>Equity <b id="me-eq"></b></span><span id="me-pnl"></span></div>
+            <div class="row"><select id="t-sym"></select><input id="t-qty" type="number" min="1" value="10" size="6" style="width:90px">
+              <button id="buy">Buy at ask</button><button class="sell" id="sell">Sell at bid</button><span id="t-est" class="dim"></span></div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="panel">
+          <div class="row" style="margin-bottom:8px"><h2 style="margin:0">AI desk</h2>
+            <select id="c-sym" style="margin-left:auto"><option value="">each picks a stock</option></select>
+            <button id="cycle">Run AI cycle</button></div>
+          <div class="dim" id="auto" style="margin-bottom:6px"></div>
+          <div class="feed" id="events"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  const money = n => "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const pct = n => (n >= 0 ? "+" : "") + Number(n).toFixed(2) + "%";
+  let base = "", cfg = {}, game = null, state = null, ws = null;
+  const meKey = id => "md_player_" + id;
+
+  function status(msg) { $("status").textContent = msg || ""; }
+  async function api(path, opts = {}) {
+    const headers = { "Content-Type": "application/json" };
+    const tok = localStorage.getItem("md_token");
+    if (tok) headers["X-Admin-Token"] = tok;
+    const r = await fetch(base + path, { ...opts, headers });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw Error(j.detail || "request failed (" + r.status + ")");
+    return j;
+  }
+  const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body || {}) });
+
+  function chips() {
+    const c = [];
+    c.push(cfg.persistent ? ["ok", "PostgreSQL"] : ["warn", "in-memory (not saved)"]);
+    c.push(cfg.quotes === "alpaca" ? ["ok", "Alpaca quotes"] : ["warn", "simulated quotes"]);
+    if (cfg.paper_trading) c.push(cfg.orders_allowed ? ["ok", "Alpaca paper orders"] : ["warn", "orders blocked: not a paper URL"]);
+    if (cfg.autopilot_minutes) c.push(["ok", "AI every " + cfg.autopilot_minutes + " min"]);
+    $("chips").innerHTML = c.map(([k, t]) => `<span class="chip ${k}">${esc(t)}</span>`).join("");
+  }
+
+  async function lobby() {
+    const games = await api("/api/days/games").catch(e => { status(e.message); return []; });
+    $("games").innerHTML = games.length ? games.map(g =>
+      `<button class="ghost" data-id="${esc(g.id)}">${esc(g.name)} · ${esc(g.symbols.join(" "))}</button>`).join("")
+      : '<span class="dim">No games yet. Create one below.</span>';
+  }
+  $("games").onclick = e => { const b = e.target.closest("button"); if (b) open(b.dataset.id); };
+
+  async function open(id) {
+    try {
+      state = await api("/api/days/games/" + id);
+      game = state; location.hash = "game=" + id; status("");
+      $("game").classList.remove("hidden");
+      paint();
+      connect();
+    } catch (e) { status(e.message); }
+  }
+
+  function me() { const id = localStorage.getItem(meKey(game.id)); return state.leaderboard.find(r => r.id === id); }
+
+  function paint() {
+    const s = state;
+    $("title").textContent = s.name;
+    $("meta").textContent = `${s.symbols.join(", ")} · started ${new Date(s.created_at).toLocaleString()} · ${money(s.start_cash)} each`;
+    const sim = cfg.quotes !== "alpaca";
+    $("quotes").innerHTML = s.quotes.map(q => `<tr><td>${esc(q.symbol)}${sim ? ' <span class="dim">sim</span>' : ""}</td>
+      <td class="num">${q.bid.toFixed(2)}</td><td class="num">${q.ask.toFixed(2)}</td><td class="num">${((q.bid + q.ask) / 2).toFixed(2)}</td></tr>`).join("")
+      || '<tr><td colspan="4" class="dim">No quotes available right now.</td></tr>';
+    const mine = localStorage.getItem(meKey(s.id));
+    const deskEmoji = Object.fromEntries((cfg.ai_desk || []).map(d => [d.key, d.emoji]));
+    $("board").innerHTML = s.leaderboard.map(r => `<tr class="${r.id === mine ? "me" : ""}"><td>${r.rank}</td>
+      <td>${r.kind === "ai" ? (deskEmoji[r.archetype] || "🤖") : "🧑"} ${esc(r.name)}${r.id === mine ? " (you)" : ""}</td>
+      <td class="num">${money(r.equity)}</td><td class="num ${r.pnl_pct >= 0 ? "up" : "down"}">${pct(r.pnl_pct)}</td>
+      <td class="dim">${r.positions.map(p => p.qty + " " + esc(p.symbol)).join(", ") || "all cash"}</td></tr>`).join("");
+    const opts = s.symbols.map(x => `<option>${esc(x)}</option>`).join("");
+    if ($("t-sym").options.length !== s.symbols.length) $("t-sym").innerHTML = opts;
+    if ($("c-sym").options.length !== s.symbols.length + 1) $("c-sym").innerHTML = '<option value="">each picks a stock</option>' + opts;
+    const m = me();
+    $("join-row").classList.toggle("hidden", !!m);
+    $("ticket").classList.toggle("hidden", !m);
+    if (m) {
+      $("me-cash").textContent = money(m.cash); $("me-eq").textContent = money(m.equity);
+      $("me-pnl").innerHTML = `<span class="${m.pnl_pct >= 0 ? "up" : "down"}">${pct(m.pnl_pct)}</span> · rank ${m.rank} of ${s.leaderboard.length}`;
+    }
+    est();
+    $("auto").textContent = cfg.autopilot_minutes ? `The desk also trades on its own every ${cfg.autopilot_minutes} minutes while the market is open.`
+      : "Each AI manager reads the quotes and recent daily bars, decides in character, and places a paper order (max " + cfg.max_order_qty + " shares).";
+    $("events").innerHTML = s.events.slice().reverse().map(ev).join("") || '<div class="dim">Nothing yet.</div>';
+  }
+
+  function ev(e) {
+    const p = e.payload || {}, t = `<span class="t">${new Date(e.created_at).toLocaleTimeString()}</span>`;
+    if (e.kind === "ai_decision") {
+      const cls = p.action === "buy" ? "up" : p.action === "sell" ? "down" : "dim";
+      const what = p.action === "hold" ? "HOLD" : `${p.action.toUpperCase()} ${p.qty} ${esc(p.symbol)} @ ${Number(p.price).toFixed(2)}`;
+      const order = p.order_id ? `<br><span class="dim">${p.simulated ? "simulated order" : "Alpaca paper order"} ${esc(p.order_id)}</span>` : "";
+      const err = p.error ? `<br><span class="err">${esc(p.error)}</span>` : "";
+      return `<div class="ev">${t}${esc(p.emoji || "🤖")} <b>${esc(p.trader)}</b> <span class="act ${cls}">${what}</span>${p.action === "hold" ? " " + esc(p.symbol) : ""}<br>${esc(p.thought)}${order}${err}</div>`;
+    }
+    if (e.kind === "human_trade") return `<div class="ev">${t}🧑 <b>${esc(p.trader)}</b> <span class="act ${p.side === "buy" ? "up" : "down"}">${p.side.toUpperCase()} ${p.qty} ${esc(p.symbol)} @ ${Number(p.price).toFixed(2)}</span></div>`;
+    if (e.kind === "player_joined") return `<div class="ev">${t}<span class="dim">${esc(p.player)} joined the game</span></div>`;
+    if (e.kind === "game_created") return `<div class="ev">${t}<span class="dim">Game created: ${esc((p.symbols || []).join(", "))}</span></div>`;
+    if (e.kind === "ai_paper_order") return `<div class="ev">${t}🤖 <b>${esc(p.trader)}</b> <span class="act up">BUY ${p.qty} ${esc(p.symbol)}</span></div>`;
+    return `<div class="ev">${t}<span class="dim">${esc(e.kind)}</span></div>`;
+  }
+
+  function est() {
+    const q = (state && state.quotes || []).find(x => x.symbol === $("t-sym").value), n = +$("t-qty").value || 0;
+    $("t-est").textContent = q && n ? `≈ ${money(n * q.ask)} to buy · ${money(n * q.bid)} to sell` : "";
+  }
+  $("t-sym").onchange = $("t-qty").oninput = est;
+
+  async function trade(side) {
+    try {
+      await post(`/api/days/games/${game.id}/trade`, { player_id: localStorage.getItem(meKey(game.id)), symbol: $("t-sym").value, side, qty: +$("t-qty").value });
+      status(""); await refresh();
+    } catch (e) { status(e.message); }
+  }
+  $("buy").onclick = () => trade("buy");
+  $("sell").onclick = () => trade("sell");
+
+  $("join").onclick = async () => {
+    try {
+      const p = await post(`/api/days/games/${game.id}/join`, { name: $("me-name").value || "Player" });
+      localStorage.setItem(meKey(game.id), p.id); status(""); await refresh();
+    } catch (e) { status(e.message); }
+  };
+  $("cycle").onclick = async () => {
+    $("cycle").disabled = true; $("cycle").textContent = "AI desk thinking…";
+    try { await post(`/api/days/games/${game.id}/ai-cycle`, { symbol: $("c-sym").value || null }); status(""); await refresh(); }
+    catch (e) { status(e.message); }
+    $("cycle").disabled = false; $("cycle").textContent = "Run AI cycle";
+  };
+  $("create").onclick = async () => {
+    if ($("token").value) localStorage.setItem("md_token", $("token").value);
+    try {
+      const g = await post("/api/days/games", { name: $("name").value, symbols: $("symbols").value.split(",").map(x => x.trim()) });
+      status(""); await lobby(); open(g.id);
+    } catch (e) { status(e.message); }
+  };
+  $("share").onclick = () => { navigator.clipboard && navigator.clipboard.writeText(location.href); $("share").textContent = "Copied"; setTimeout(() => $("share").textContent = "Copy link", 1500); };
+
+  let pending = null;
+  async function refresh() { if (game) { state = await api("/api/days/games/" + game.id); paint(); } }
+  function connect() {
+    if (ws) return;
+    ws = new WebSocket(base.replace(/^http/, "ws") + "/ws");
+    ws.onmessage = e => {
+      const m = JSON.parse(e.data);
+      if (game && m.type === "market_days" && m.game_id === game.id) { clearTimeout(pending); pending = setTimeout(refresh, 250); }
+    };
+    ws.onclose = () => { ws = null; setTimeout(connect, 2000); };
+  }
+  setInterval(() => { if (game && !document.hidden) refresh().catch(() => {}); }, 15000); // quotes move without events
+
+  (async () => {
+    try { const r = await fetch("/api/config"); if (r.ok) base = ((await r.json()).apiBase || "").replace(/\/$/, ""); } catch (_) {}
+    if (!base) base = location.origin;
+    try { cfg = await api("/api/days/config"); } catch (e) { status(e.message); return; }
+    if (!cfg.enabled) status("Market Days is disabled: the database is unreachable. Check DATABASE_URL.");
+    chips();
+    if (cfg.operator_token_required) { $("token").classList.remove("hidden"); $("token").value = localStorage.getItem("md_token") || ""; }
+    await lobby();
+    const id = (location.hash.match(/game=([\w-]+)/) || [])[1];
+    if (id) open(id);
+  })();
+})();
+</script>
+</body>
+</html>
