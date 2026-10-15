@@ -140,10 +140,11 @@ class AlpacaSettings:
         key, secret = os.getenv("ALPACA_API_KEY"), os.getenv("ALPACA_API_SECRET")
         if not key or not secret:
             return None
-        trading = os.getenv("ALPACA_PAPER_BASE_URL", "https://paper-api.alpaca.markets")
+        # Alpaca's dashboard shows ".../v2"; accept it with or without (the client adds /v2 itself)
+        trading = os.getenv("ALPACA_PAPER_BASE_URL", "https://paper-api.alpaca.markets").rstrip("/").removesuffix("/v2")
         # Safety: this mode only ever trades paper money. A live endpoint disables orders entirely.
         paper = (urlparse(trading).hostname or "").startswith("paper-api.")
-        return cls(key, secret, trading, os.getenv("ALPACA_DATA_BASE_URL", "https://data.alpaca.markets"), paper)
+        return cls(key, secret, trading, os.getenv("ALPACA_DATA_BASE_URL", "https://data.alpaca.markets").rstrip("/").removesuffix("/v2"), paper)
 
 
 class AlpacaPaper:

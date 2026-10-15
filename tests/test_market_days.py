@@ -257,3 +257,11 @@ def test_alpaca_bars_use_iex_and_a_start_date():
     assert bars == [{"t": t, "o": 1.0, "h": 2.0, "l": 0.5, "c": 1.5, "v": 9.0}]
     q = seen[0].url.params
     assert q["timeframe"] == "5Min" and q["feed"] == "iex" and q["start"].endswith("Z")
+
+
+def test_alpaca_endpoint_accepts_dashboard_form(monkeypatch):
+    monkeypatch.setenv("ALPACA_API_KEY", "k")
+    monkeypatch.setenv("ALPACA_API_SECRET", "s")
+    monkeypatch.setenv("ALPACA_PAPER_BASE_URL", "https://paper-api.alpaca.markets/v2/")
+    st = AlpacaSettings.from_env()
+    assert st.trading_url == "https://paper-api.alpaca.markets" and st.allow_orders
