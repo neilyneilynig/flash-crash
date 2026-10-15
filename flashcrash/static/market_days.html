@@ -420,7 +420,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
     $("meta").textContent = `${s.symbols.join(", ")} · started ${new Date(s.created_at).toLocaleString()} · ${money(s.start_cash)} each`;
     const sim = cfg.quotes !== "alpaca";
     $("quotes").innerHTML = s.quotes.map(q => { const g = sigs[q.symbol];
-      return `<tr data-sym="${esc(q.symbol)}" class="${q.symbol === sel ? "sel" : ""}"><td>${esc(q.symbol)}${sim ? ' <span class="dim">sim</span>' : ""}</td>
+      return `<tr data-sym="${esc(q.symbol)}" class="${q.symbol === sel ? "sel" : ""}"><td>${esc(q.symbol)}${sim ? ' <span class="dim">sim</span>' : q.last_trade ? ' <span class="dim" title="Market closed: priced off the last trade">last trade</span>' : ""}</td>
       <td class="num">${q.bid.toFixed(2)}</td><td class="num">${q.ask.toFixed(2)}</td><td class="num">${((q.bid + q.ask) / 2).toFixed(2)}</td>
       <td class="num">${g ? `<span class="badge ${g.tone}">${esc(g.label)}</span>` : '<span class="dim">…</span>'}</td></tr>`; }).join("")
       || '<tr><td colspan="5" class="dim">No quotes available right now.</td></tr>';

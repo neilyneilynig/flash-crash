@@ -265,3 +265,18 @@ def test_alpaca_endpoint_accepts_dashboard_form(monkeypatch):
     monkeypatch.setenv("ALPACA_PAPER_BASE_URL", "https://paper-api.alpaca.markets/v2/")
     st = AlpacaSettings.from_env()
     assert st.trading_url == "https://paper-api.alpaca.markets" and st.allow_orders
+
+
+def test_wide_after_hours_quote_falls_back_to_last_trade():
+    def handler(request):
+        if request.url.path.endswith("/quotes/latest"):
+            return httpx.Response(200, json={"quote": {"bp": 209.79, "ap": 232.52, "t": "then"}})
+        return httpx.Response(200, json={"trade": {"p": 221.5, "t": "last"}})
+
+    async def run():
+        alpaca = AlpacaPaper(AlpacaSettings("k", "s", "https://trade", "https://data"),
+                             httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+        return await alpaca.quote("NVDA")
+
+    q = asyncio.run(run())
+    assert q["last_trade"] and q["bid"] < 221.5 < q["ask"] and q["ask"] - q["bid"] < 0.2

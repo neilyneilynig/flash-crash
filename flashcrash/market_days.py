@@ -37,6 +37,7 @@ DESK_NAMES = {"wsb": "Chad the Degen", "value": "Warren Jr.", "quant": "Q-Bot 90
 # chart range -> (Alpaca timeframe, bar seconds, lookback days, bars to keep)
 RANGES = {"1D": ("5Min", 300, 4, 78), "5D": ("30Min", 1800, 9, 65), "3M": ("1Day", 86400, 140, 63),
           "1Y": ("1Day", 86400, 420, 252)}
+WIDE_SPREAD = 0.01  # quotes wider than 1% of the price are treated as unusable (typical after hours)
 CHART_TTL = 30.0  # seconds; keeps Alpaca well under its rate limit however many phones are watching
 
 
@@ -173,12 +174,22 @@ class AlpacaPaper:
             raise MarketDaysError("Alpaca is unavailable; try again shortly") from exc
 
     async def quote(self, symbol: str) -> dict:
-        data = await self._request("GET", f"{self.settings.data_url}/v2/stocks/{symbol}/quotes/latest")
+        data = await self._request("GET", f"{self.settings.data_url}/v2/stocks/{symbol}/quotes/latest",
+                                   params={"feed": os.getenv("ALPACA_DATA_FEED", "iex")})
         quote = data.get("quote") or {}
         bid, ask = quote.get("bp"), quote.get("ap")
-        if bid is None or ask is None:
+        if bid and ask and ask >= bid and (ask - bid) / ((ask + bid) / 2) <= WIDE_SPREAD:
+            return {"symbol": symbol, "bid": float(bid), "ask": float(ask), "at": quote.get("t")}
+        # Outside market hours the free IEX feed often quotes absurd spreads (or none). Trading at those would hand
+        # players an instant loss, so price off the last real trade with a normal-looking spread instead.
+        data = await self._request("GET", f"{self.settings.data_url}/v2/stocks/{symbol}/trades/latest",
+                                   params={"feed": os.getenv("ALPACA_DATA_FEED", "iex")})
+        price = (data.get("trade") or {}).get("p")
+        if not price:
             raise MarketDaysError(f"Alpaca returned no usable quote for {symbol}")
-        return {"symbol": symbol, "bid": float(bid), "ask": float(ask), "at": quote.get("t")}
+        half = max(0.01, round(float(price) * 0.0002, 2))
+        return {"symbol": symbol, "bid": round(float(price) - half, 2), "ask": round(float(price) + half, 2),
+                "at": (data.get("trade") or {}).get("t"), "last_trade": True}
 
     async def closes(self, symbol: str, days: int = 10) -> list[float]:
         """Recent daily closes, oldest first (empty if unavailable: decisions still work without them)."""
