@@ -40,6 +40,24 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .ev .act { font-weight: bold; }
 .hidden { display: none !important; }
 #status:empty { display: none; }
+.head { display: flex; gap: 14px; align-items: center; }
+.head .info { flex: 1; min-width: 0; }
+.qr { background: #fff; padding: 6px; line-height: 0; cursor: zoom-in; border: none; }
+.qr img { width: 96px; height: 96px; image-rendering: pixelated; }
+.qr-url { font-size: 12px; color: var(--dim); word-break: break-all; margin-top: 4px; }
+.overlay { position: fixed; inset: 0; background: rgba(3, 8, 5, .92); z-index: 20; display: flex; align-items: center; justify-content: center; padding: 20px; }
+#qr-big { flex-direction: column; text-align: center; cursor: zoom-out; }
+#qr-big .qr { cursor: zoom-out; padding: 14px; }
+#qr-big .qr img { width: min(70vmin, 520px); height: min(70vmin, 520px); }
+#qr-big h2 { color: var(--g); letter-spacing: 3px; margin: 0 0 16px; }
+.tut { max-width: 460px; width: 100%; border: 1px solid #2f7a4d; background: #0b1811; padding: 22px; }
+.tut .step { font-size: 12px; color: var(--dim); letter-spacing: 2px; }
+.tut .big { font-size: 44px; margin: 10px 0 4px; }
+.tut h3 { color: var(--g); margin: 4px 0 8px; font-size: 18px; }
+.tut p { line-height: 1.55; margin: 0 0 8px; }
+.tut .dots { display: flex; gap: 6px; margin: 14px 0; }
+.tut .dots i { width: 8px; height: 8px; background: #244b37; }
+.tut .dots i.on { background: var(--g); }
 </style>
 </head>
 <body>
@@ -64,8 +82,15 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 
   <section id="game" class="hidden">
     <div class="panel">
-      <div class="row"><b id="title" style="font-size:16px"></b><span class="dim" id="meta"></span>
-        <button class="ghost" id="share" style="margin-left:auto">Copy link</button></div>
+      <div class="head">
+        <div class="info">
+          <div class="row"><b id="title" style="font-size:16px"></b><span class="dim" id="meta"></span></div>
+          <div class="row" style="margin-top:10px"><span class="dim">📱 Scan the code to join from your phone</span>
+            <button class="ghost" id="share">Copy link</button><button class="ghost" id="how">How to play</button></div>
+          <div class="qr-url" id="qr-url"></div>
+        </div>
+        <button class="qr" id="qr" title="Show big QR code" aria-label="Show big QR code"></button>
+      </div>
     </div>
     <div class="grid">
       <div>
@@ -99,6 +124,14 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
     </div>
   </section>
 </main>
+<div class="overlay hidden" id="qr-big"><h2>SCAN TO JOIN</h2><div class="qr" id="qr-big-img"></div>
+  <p class="qr-url" id="qr-big-url" style="font-size:15px"></p><p class="dim">tap anywhere to close</p></div>
+<div class="overlay hidden" id="tut"><div class="tut">
+  <div class="step" id="tut-step"></div><div class="big" id="tut-big"></div>
+  <h3 id="tut-title"></h3><div id="tut-body"></div>
+  <div class="dots" id="tut-dots"></div>
+  <div class="row"><button class="ghost" id="tut-skip">Skip</button><button id="tut-next" style="margin-left:auto">Next</button></div>
+</div></div>
 <script>
 (() => {
   const $ = id => document.getElementById(id);
@@ -143,9 +176,75 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
       game = state; location.hash = "game=" + id; status("");
       $("game").classList.remove("hidden");
       paint();
+      showQr(id);
       connect();
     } catch (e) { status(e.message); }
   }
+
+  // Join link: on localhost, phones can't reach "127.0.0.1", so ask the server for its LAN/public address.
+  let joinBase = null, qrLib = null;
+  async function joinUrl(id) {
+    if (joinBase == null) {
+      joinBase = location.origin + location.pathname;
+      if (/^(localhost|127\.|\[::1\])/.test(location.hostname)) {
+        try { const i = await api("/api/info"); joinBase = i.join_url.replace(/\/play$/, "/days"); } catch (_) {}
+      }
+    }
+    return joinBase + "#game=" + id;
+  }
+  function loadQr() {
+    if (window.qrcode) return Promise.resolve();
+    return qrLib || (qrLib = new Promise((ok, fail) => {
+      const sc = document.createElement("script"); sc.src = base + "/static/vendor/qrcode.js";
+      sc.onload = ok; sc.onerror = fail; document.head.appendChild(sc);
+    }));
+  }
+  async function showQr(id) {
+    const url = await joinUrl(id);
+    $("qr-url").textContent = $("qr-big-url").textContent = url.replace(/^https?:\/\//, "");
+    try {
+      await loadQr();
+      const qr = qrcode(0, "M"); qr.addData(url); qr.make();
+      $("qr").innerHTML = $("qr-big-img").innerHTML = qr.createImgTag(4, 0);
+    } catch (_) { $("qr").classList.add("hidden"); }
+  }
+  $("qr").onclick = () => $("qr-big").classList.remove("hidden");
+  $("qr-big").onclick = () => $("qr-big").classList.add("hidden");
+
+  // Tutorial: shown once after you join, and any time from "How to play".
+  function steps() {
+    const desk = (cfg.ai_desk || []).map(d => `${esc(d.emoji)} <b>${esc(d.name)}</b> <span class="dim">${esc(d.label)}</span>`).join("<br>");
+    const real = cfg.quotes === "alpaca";
+    return [
+      ["💵", "You get " + money(state.start_cash), `<p>Everyone starts with the same pile of <b>paper money</b>. Nothing here is real cash.</p>
+        <p>The stocks are <b>${esc(state.symbols.join(", "))}</b>${real ? ", priced live from the real market." : ". Prices are simulated right now, but they move like the real thing."}</p>`],
+      ["🛒", "Buy at the ask, sell at the bid", `<p>Pick a stock and a number of shares in <b>Your desk</b>, then hit <b class="up">Buy</b> or <b class="down">Sell</b>.</p>
+        <p>You buy at the <b>ask</b> (a bit above the middle price) and sell at the <b>bid</b> (a bit below). That gap is the spread, so flipping in and out costs you.</p>`],
+      ["🤖", "Beat the AI desk", `<p>Four AI fund managers trade the same stocks, each in character:</p><p>${desk}</p>
+        <p>Read their reasoning in the <b>AI desk</b> feed, then fade them or follow them.</p>`],
+      ["🏆", "Climb the leaderboard", `<p>Your score is <b>equity</b>: cash plus your shares at today's price. Your row is highlighted.</p>
+        <p>Friends can join by scanning the QR code. Good luck!</p>`],
+    ];
+  }
+  let tutAt = 0;
+  function tutPaint() {
+    const all = steps(), [big, title, body] = all[tutAt];
+    $("tut-step").textContent = `STEP ${tutAt + 1} OF ${all.length}`;
+    $("tut-big").textContent = big; $("tut-title").textContent = title; $("tut-body").innerHTML = body;
+    $("tut-dots").innerHTML = all.map((_, i) => `<i class="${i === tutAt ? "on" : ""}"></i>`).join("");
+    $("tut-next").textContent = tutAt === all.length - 1 ? "Start trading" : "Next";
+    $("tut-skip").classList.toggle("hidden", tutAt === all.length - 1);
+  }
+  function tutorial() { tutAt = 0; tutPaint(); $("tut").classList.remove("hidden"); $("tut-next").focus(); }
+  function tutDone() { $("tut").classList.add("hidden"); localStorage.setItem("md_tut_seen", "1"); $("t-qty").focus(); }
+  $("tut-next").onclick = () => { if (tutAt < steps().length - 1) { tutAt++; tutPaint(); } else tutDone(); };
+  $("tut-skip").onclick = tutDone;
+  $("how").onclick = () => state && tutorial();
+  document.addEventListener("keydown", e => {
+    if (e.key !== "Escape") return;
+    if (!$("tut").classList.contains("hidden")) tutDone();
+    $("qr-big").classList.add("hidden");
+  });
 
   function me() { const id = localStorage.getItem(meKey(game.id)); return state.leaderboard.find(r => r.id === id); }
 
@@ -215,8 +314,10 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
     try {
       const p = await post(`/api/days/games/${game.id}/join`, { name: $("me-name").value || "Player" });
       localStorage.setItem(meKey(game.id), p.id); localStorage.setItem(meKey(game.id) + "_t", p.token); status(""); await refresh();
+      if (!localStorage.getItem("md_tut_seen")) tutorial();
     } catch (e) { status(e.message); }
   };
+  $("me-name").onkeydown = e => { if (e.key === "Enter") $("join").click(); };
   $("cycle").onclick = async () => {
     $("cycle").disabled = true; $("cycle").textContent = "AI desk thinking…";
     try { await post(`/api/days/games/${game.id}/ai-cycle`, { symbol: $("c-sym").value || null }); status(""); await refresh(); }
@@ -230,7 +331,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
       status(""); await lobby(); open(g.id);
     } catch (e) { status(e.message); }
   };
-  $("share").onclick = () => { navigator.clipboard && navigator.clipboard.writeText(location.href); $("share").textContent = "Copied"; setTimeout(() => $("share").textContent = "Copy link", 1500); };
+  $("share").onclick = async () => { const url = await joinUrl(game.id); navigator.clipboard && navigator.clipboard.writeText(url); $("share").textContent = "Copied"; setTimeout(() => $("share").textContent = "Copy link", 1500); };
 
   let pending = null;
   async function refresh() { if (game) { state = await api("/api/days/games/" + game.id); paint(); } }
@@ -254,7 +355,11 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
     if (cfg.operator_token_required) { $("token").classList.remove("hidden"); $("token").value = localStorage.getItem("md_token") || ""; }
     await lobby();
     const id = (location.hash.match(/game=([\w-]+)/) || [])[1];
-    if (id) open(id);
+    if (id) {
+      await open(id);
+      // Arrived from the QR code and not playing yet: jump straight to the join box.
+      if (game && !me()) { $("desk").scrollIntoView({ block: "center" }); $("me-name").focus(); }
+    }
   })();
 })();
 </script>
