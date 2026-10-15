@@ -271,6 +271,15 @@ async def days_trade(game_id: str, body: DaysTradeIn):
         _days_error(exc)
 
 
+@app.post("/api/days/games/{game_id}/restart")
+async def days_restart(game_id: str, x_admin_token: str | None = Header(None)):
+    _days_operator(x_admin_token)
+    try:
+        return await market_days.restart(game_id)
+    except MarketDaysError as exc:
+        _days_error(exc)
+
+
 @app.post("/api/days/games/{game_id}/ai-cycle")
 async def days_ai_cycle(game_id: str, body: DaysCycleIn, x_admin_token: str | None = Header(None)):
     _days_operator(x_admin_token)

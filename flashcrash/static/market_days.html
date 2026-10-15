@@ -185,7 +185,7 @@ td.num, th.num { text-align: right; }
         <h1 id="title"></h1>
         <div class="dim" id="meta" style="margin-top:4px"></div>
         <div class="row" style="margin-top:10px"><span class="dim">📱 Scan to join from your phone</span>
-          <button class="ghost" id="share">Copy link</button><button class="ghost" id="how">How to play</button><button class="ghost" id="back">All games</button></div>
+          <button class="ghost" id="share">Copy link</button><button class="ghost" id="how">How to play</button><button class="ghost" id="back">All games</button><button class="ghost" id="restart" style="color:var(--red)">↺ Restart game</button></div>
         <div class="qr-url" id="qr-url"></div>
       </div>
       <button class="qr" id="qr" title="Show big QR code" aria-label="Show big QR code"></button>
@@ -658,6 +658,7 @@ td.num, th.num { text-align: right; }
       return `<div class="ev">${t}${esc(p.emoji || "🤖")} <b>${esc(p.trader)}</b> <span class="act ${cls}">${what}</span><span class="why">${esc(p.thought)}</span>${meta ? `<span class="meta">${meta}</span>` : ""}${err}</div>`;
     }
     if (e.kind === "human_trade") return `<div class="ev">${t}🧑 <b>${esc(p.trader)}</b> <span class="act ${p.side === "buy" ? "up" : "down"}">${p.side.toUpperCase()} ${p.qty} ${esc(p.symbol)} @ ${Number(p.price).toFixed(2)}</span></div>`;
+    if (e.kind === "game_restarted") return `<div class="ev">${t}<span class="neutral">↺ Game restarted: everyone is back to ${money(p.start_cash || state.start_cash)}</span></div>`;
     if (e.kind === "player_joined") return `<div class="ev">${t}<span class="dim">👋 ${esc(p.player)} joined the game</span></div>`;
     if (e.kind === "game_created") return `<div class="ev">${t}<span class="dim">🔔 Game created: ${esc((p.symbols || []).join(", "))}</span></div>`;
     if (e.kind === "ai_error") return `<div class="ev">${t}<span class="dim">${esc(p.trader)} couldn't decide (${esc(p.error)})</span></div>`;
@@ -715,6 +716,18 @@ td.num, th.num { text-align: right; }
       status(""); await lobby(); open(g.id);
     } catch (e) { status(e.message); }
   };
+  // Restart wipes everyone's trades, so it takes a second click (no browser dialogs: they freeze TV browsers).
+  let armed = null;
+  $("restart").onclick = async () => {
+    if (!armed) {
+      $("restart").textContent = "Tap again to wipe all trades"; $("restart").style.background = "rgba(255,107,122,.12)";
+      armed = setTimeout(disarm, 4000); return;
+    }
+    disarm();
+    try { await post(`/api/days/games/${game.id}/restart`); await refresh(); toast(`↺ Game restarted. Everyone is back to ${money(state.start_cash)}.`); }
+    catch (e) { toast("⚠️ " + esc(e.message), true); }
+  };
+  function disarm() { clearTimeout(armed); armed = null; $("restart").textContent = "↺ Restart game"; $("restart").style.background = ""; }
   $("back").onclick = () => {  // back to the lobby; the open game stays one tap away
     game = null; history.replaceState(null, "", location.pathname + location.search);
     $("game").classList.add("hidden"); $("lobby").classList.remove("hidden"); lobby(); scrollTo(0, 0);

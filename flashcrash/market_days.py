@@ -370,6 +370,13 @@ class MarketDaysStore:
                 _uuid(game_id), _uuid(player_id), symbol, side, qty, price, order_id)
         return _plain(row)
 
+    async def reset(self, game_id: str) -> None:
+        """Wipe trades and the feed; players keep their seats (and their join tokens)."""
+        async with self._pool().acquire() as conn, conn.transaction():
+            gid = _uuid(game_id)
+            await conn.execute("DELETE FROM market_days_fills WHERE game_id = $1", gid)
+            await conn.execute("DELETE FROM market_days_events WHERE game_id = $1", gid)
+
     async def fills(self, game_id: str) -> list[dict]:
         async with self._pool().acquire() as conn:
             rows = await conn.fetch("SELECT id, player_id, symbol, side, qty, price, order_id, created_at "
@@ -451,6 +458,10 @@ class MemoryStore:
                "price": price, "order_id": order_id, "created_at": _now()}
         self._fills[game["id"]].append(row)
         return dict(row)
+
+    async def reset(self, game_id: str) -> None:
+        gid = self._get(game_id)["id"]
+        self._fills[gid], self._events[gid] = [], []
 
     async def fills(self, game_id: str) -> list[dict]:
         return [dict(f) for f in self._fills[self._get(game_id)["id"]]]
@@ -669,6 +680,15 @@ class MarketDays:
                                                              "qty": qty, "price": price})
         await self._emit(game_id, ev)
         return fill
+
+    async def restart(self, game_id: str) -> dict:
+        """Everyone back to the starting bankroll with no positions, same players, fresh feed."""
+        async with self._lock(game_id):
+            game = await self.store.game(game_id)
+            await self.store.reset(game_id)
+            ev = await self.store.event(game_id, "game_restarted", {"start_cash": game["start_cash"]})
+        await self._emit(game_id, ev)
+        return ev
 
     # --- the AI desk ------------------------------------------------------------------------------------------
     async def _headlines(self, symbol: str) -> list[dict]:

@@ -310,3 +310,20 @@ def test_clock_is_cached_and_flags_simulation():
     md = MarketDays()
     c = asyncio.run(md.clock())
     assert c["is_open"] is True and c["simulated"] is True
+
+
+def test_restart_resets_everyone_but_keeps_players(days):
+    async def run():
+        await days.start()
+        g = await days.create_game("Reset me", ["SPY"])
+        p = await days.join(g["id"], "Neil")
+        await days.trade(g["id"], p["id"], "SPY", "buy", 5, p["token"])
+        await days.restart(g["id"])
+        s = await days.state(g["id"])
+        await days.trade(g["id"], p["id"], "SPY", "buy", 1, p["token"])  # token still works
+        return s
+
+    s = asyncio.run(run())
+    assert all(r["equity"] == 100_000 and not r["positions"] for r in s["leaderboard"])
+    assert len(s["leaderboard"]) == 5
+    assert [e["kind"] for e in s["events"]] == ["game_restarted"]
