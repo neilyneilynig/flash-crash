@@ -278,6 +278,7 @@ class DaysAskIn(BaseModel):
     symbol: str
     question: str
     player_id: str | None = None
+    token: str = ""
 
 
 @app.get("/api/days/news/{symbol}")
@@ -291,8 +292,7 @@ async def days_news(symbol: str):
 @app.post("/api/days/games/{game_id}/ask")
 async def days_ask(game_id: str, body: DaysAskIn):
     try:
-        players = {p["id"]: p["name"] for p in await market_days.store.players(game_id)}
-        return await market_days.ask(game_id, body.symbol, body.question, players.get(body.player_id or "", ""))
+        return await market_days.ask(game_id, body.symbol, body.question, body.player_id or "", body.token)
     except MarketDaysError as exc:
         _days_error(exc)
 

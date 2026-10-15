@@ -12,6 +12,7 @@ Without DATABASE_URL the store is in-memory, and without Alpaca keys quotes are 
 from __future__ import annotations
 
 import asyncio
+import collections
 import hashlib
 import json
 import math
@@ -41,6 +42,7 @@ RANGES = {"1D": ("5Min", 300, 4, 78), "5D": ("30Min", 1800, 9, 65), "3M": ("1Day
           "1Y": ("1Day", 86400, 420, 252)}
 WIDE_SPREAD = 0.01  # quotes wider than 1% of the price are treated as unusable (typical after hours)
 ASK_COOLDOWN = float(os.getenv("MARKET_DAYS_ASK_COOLDOWN", "8"))  # seconds between questions per game (LLM cost)
+ASK_PER_MINUTE = int(os.getenv("MARKET_DAYS_ASK_PER_MINUTE", "12"))  # questions per minute across all games
 CHART_TTL = 30.0  # seconds; keeps Alpaca well under its rate limit however many phones are watching
 
 
@@ -575,6 +577,7 @@ class MarketDays:
         self._news: dict[str, tuple[float, list[dict]]] = {}
         self._charts: dict[str, tuple[float, dict]] = {}
         self._asked: dict[str, float] = {}
+        self._ask_log: collections.deque[float] = collections.deque()
 
     @classmethod
     def from_env(cls, brain=None) -> "MarketDays":
@@ -697,19 +700,31 @@ class MarketDays:
         return result
 
     # --- ask the desk --------------------------------------------------------------------------------------------
-    async def ask(self, game_id: str, symbol: str, question: str, asker: str = "") -> dict:
-        """Every AI manager answers a player's question about a stock, in character, from the same evidence."""
+    async def ask(self, game_id: str, symbol: str, question: str, player_id: str = "", token: str = "") -> dict:
+        """Every AI manager answers a player's question about a stock, in character, from the same evidence.
+        Credited to a player only with their join token (like trades); otherwise it's anonymous."""
         game = await self.store.game(game_id)
+        asker = ""
+        if player_id:
+            want = await self.store.player_secret(game_id, player_id)
+            if not want or not secrets.compare_digest(_hash(token or ""), want):
+                raise MarketDaysAuthError("not your player: rejoin this game on this device")
+            asker = next((p["name"] for p in await self.store.players(game_id) if p["id"] == str(player_id)), "")
         symbol = (symbol or "").strip().upper()
         if symbol not in game["symbols"]:
             raise MarketDaysInputError("symbol is not in this game")
         question = " ".join((question or "").split())[:200]
         if len(question) < 3:
             raise MarketDaysInputError("ask a question first")
-        last = self._asked.get(game["id"], 0.0)
-        if time.monotonic() - last < ASK_COOLDOWN:
+        now = time.monotonic()
+        if now - self._asked.get(game["id"], 0.0) < ASK_COOLDOWN:
             raise MarketDaysInputError("the desk is still answering the last question; try again in a few seconds")
-        self._asked[game["id"]] = time.monotonic()
+        while self._ask_log and now - self._ask_log[0] > 60:
+            self._ask_log.popleft()
+        if len(self._ask_log) >= ASK_PER_MINUTE:  # every question is four LLM calls: cap the total, across all games
+            raise MarketDaysInputError("the desk is swamped with questions; try again in a minute")
+        self._asked[game["id"]] = now
+        self._ask_log.append(now)
         q = (await self._quotes([symbol]) or [None])[0]
         price = (q["bid"] + q["ask"]) / 2 if q else None
         try:

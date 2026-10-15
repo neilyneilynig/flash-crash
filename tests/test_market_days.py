@@ -333,7 +333,10 @@ def test_ask_the_desk_answers_in_character_and_logs_it(days):
     async def run():
         await days.start()
         g = await days.create_game("Ask", ["SPY"])
-        ev = await days.ask(g["id"], "SPY", "Should I buy SPY?", "Neil")
+        me = await days.join(g["id"], "Neil")
+        with pytest.raises(MarketDaysError, match="not your player"):  # can't post as someone else
+            await days.ask(g["id"], "SPY", "Should I buy SPY?", me["id"], "wrong-token")
+        ev = await days.ask(g["id"], "SPY", "Should I buy SPY?", me["id"], me["token"])
         with pytest.raises(MarketDaysError, match="still answering"):
             await days.ask(g["id"], "SPY", "And now?")
         with pytest.raises(MarketDaysError):
@@ -375,3 +378,18 @@ def test_alpaca_news_parsing():
 
     n = asyncio.run(run())
     assert [i["headline"] for i in n["items"]] == ["Nvidia beats record"] and n["items"][0]["sentiment"] > 0
+
+
+def test_questions_are_capped_across_games(monkeypatch):
+    import flashcrash.market_days as mdmod
+    monkeypatch.setattr(mdmod, "ASK_PER_MINUTE", 2)
+    md = MarketDays(brain=MockBrain(random.Random(1)))
+
+    async def run():
+        ids = [(await md.create_game(f"g{i}", ["SPY"]))["id"] for i in range(3)]
+        await md.ask(ids[0], "SPY", "one?")
+        await md.ask(ids[1], "SPY", "two?")
+        with pytest.raises(MarketDaysError, match="swamped"):
+            await md.ask(ids[2], "SPY", "three?")
+
+    asyncio.run(run())

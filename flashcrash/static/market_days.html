@@ -653,7 +653,7 @@ body.tv .feed { max-height: 60vh; } body.tv .tv-only { display: inline-flex !imp
     const sym = state.symbols.find(x => new RegExp("\\b" + x + "\\b", "i").test(q)) || sel;  // "is AAPL..." asks about AAPL
     $("ask-go").disabled = true; $("ask-go").textContent = "Desk is thinking…";
     try {
-      const ev = await post(`/api/days/games/${game.id}/ask`, { symbol: sym, question: q, player_id: localStorage.getItem(meKey(game.id)) });
+      const ev = await post(`/api/days/games/${game.id}/ask`, { symbol: sym, question: q, player_id: localStorage.getItem(meKey(game.id)) || "", token: localStorage.getItem(meKey(game.id) + "_t") || "" });
       $("ask-q").value = ""; paintAnswers(ev); refresh();
     } catch (e) { toast("⚠️ " + esc(e.message), true); }
     $("ask-go").disabled = false; $("ask-go").textContent = "Ask";
