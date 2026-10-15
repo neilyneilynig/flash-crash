@@ -73,6 +73,7 @@ def test_game_has_an_ai_desk_and_humans_trade_at_real_quotes(days):
 
     g, me, q, fill, state = asyncio.run(run())
     assert g["symbols"] == ["SPY", "NVDA"]
+    assert len(state["history"]["NVDA"]) == 10
     assert fill["price"] == q["ask"] or abs(fill["price"] - q["ask"]) < 5  # bought at the ask
     board = {r["name"]: r for r in state["leaderboard"]}
     assert {"Chad the Degen", "Warren Jr.", "Q-Bot 9000", "Moby Capital", "Neil"} == set(board)
@@ -193,3 +194,66 @@ def test_simultaneous_buys_cannot_overspend(days):
     assert sum(isinstance(r, dict) for r in results) == 1
     racer = next(r for r in state["leaderboard"] if r["name"] == "Racer")
     assert racer["cash"] >= 0
+
+
+# --- charts: indicators and the plain-English signal ---
+
+from flashcrash import ta
+from flashcrash.market_days import MarketDays
+
+
+def _bars(closes):
+    return [{"t": 1_700_000_000 + i * 86400, "o": c, "h": c + 1, "l": c - 1, "c": c, "v": 1000.0} for i, c in enumerate(closes)]
+
+
+def test_indicator_math():
+    assert ta.sma([1, 2, 3, 4], 2) == [None, 1.5, 2.5, 3.5]
+    up = list(range(1, 40))
+    assert ta.rsi(up)[-1] == 100.0  # never fell
+    assert ta.rsi(list(reversed(up)))[-1] < 1
+    upper, lower = ta.bollinger([10.0] * 25)
+    assert upper[-1] == lower[-1] == 10.0  # no volatility, no band width
+
+
+def test_signal_reads_crashes_and_rallies():
+    crash = [100 * 0.98 ** i for i in range(80)]
+    rally = [100 * 1.02 ** i for i in range(80)]
+    assert any("oversold" in r["text"] for r in ta.signal(_bars(crash))["reasons"])
+    assert any("overbought" in r["text"] for r in ta.signal(_bars(rally))["reasons"])
+    assert ta.signal(_bars([100.0] * 5))["label"] == "NOT ENOUGH DATA"
+    for closes in (crash, rally):
+        s = ta.signal(_bars(closes))
+        assert -100 <= s["score"] <= 100 and s["reasons"]
+
+
+def test_chart_trims_warmup_and_validates():
+    md = MarketDays()
+    c = asyncio.run(md.chart("nvda", "3M"))
+    assert c["symbol"] == "NVDA" and len(c["bars"]) == 63
+    assert len(c["sma50"]) == 63  # warm-up bars mean the long average covers the whole window
+    assert c["sma50"][0]["t"] == c["bars"][0]["t"]
+    assert c["signal"]["label"] in {"STRONG BUY", "BUY", "HOLD", "SELL", "STRONG SELL"}
+    assert asyncio.run(md.chart("NVDA", "3M")) is c  # cached
+    for bad in (("NV-DA", "3M"), ("NVDA", "10Y")):
+        with pytest.raises(MarketDaysError):
+            asyncio.run(md.chart(*bad))
+
+
+def test_alpaca_bars_use_iex_and_a_start_date():
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"bars": [{"t": "2026-10-14T13:30:00Z", "o": 1, "h": 2, "l": 0.5, "c": 1.5, "v": 9}]})
+
+    async def run():
+        alpaca = AlpacaPaper(AlpacaSettings("k", "s", "https://trade", "https://data"),
+                             httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+        return await alpaca.bars("SPY", "1D")
+
+    bars = asyncio.run(run())
+    from datetime import datetime, timezone
+    t = int(datetime(2026, 10, 14, 13, 30, tzinfo=timezone.utc).timestamp())
+    assert bars == [{"t": t, "o": 1.0, "h": 2.0, "l": 0.5, "c": 1.5, "v": 9.0}]
+    q = seen[0].url.params
+    assert q["timeframe"] == "5Min" and q["feed"] == "iex" and q["start"].endswith("Z")

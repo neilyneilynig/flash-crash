@@ -21,18 +21,23 @@ import secrets
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 import asyncpg
 import httpx
 
+from . import ta
 from .personas import BY_KEY, Agent
 
 START_CASH = 100_000.0
 MAX_ORDER_QTY = int(os.getenv("MARKET_DAYS_MAX_ORDER_QTY", "25"))  # per AI paper order
 AI_DESK = ("wsb", "value", "quant", "whale")  # archetypes managing money in every game
 DESK_NAMES = {"wsb": "Chad the Degen", "value": "Warren Jr.", "quant": "Q-Bot 9000", "whale": "Moby Capital"}
+# chart range -> (Alpaca timeframe, bar seconds, lookback days, bars to keep)
+RANGES = {"1D": ("5Min", 300, 4, 78), "5D": ("30Min", 1800, 9, 65), "3M": ("1Day", 86400, 140, 63),
+          "1Y": ("1Day", 86400, 420, 252)}
+CHART_TTL = 30.0  # seconds; keeps Alpaca well under its rate limit however many phones are watching
 
 
 class MarketDaysError(RuntimeError):
@@ -183,6 +188,17 @@ class AlpacaPaper:
             return []
         return [float(b["c"]) for b in data.get("bars") or [] if "c" in b]
 
+    async def bars(self, symbol: str, range_: str) -> list[dict]:
+        timeframe, _, lookback, _ = RANGES[range_]
+        start = (datetime.now(timezone.utc) - timedelta(days=lookback)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        data = await self._request("GET", f"{self.settings.data_url}/v2/stocks/{symbol}/bars",
+                                   params={"timeframe": timeframe, "start": start, "limit": 10000, "adjustment": "split",
+                                           "feed": os.getenv("ALPACA_DATA_FEED", "iex")})
+        bars = [{"t": int(datetime.fromisoformat(b["t"].replace("Z", "+00:00")).timestamp()),
+                 "o": float(b["o"]), "h": float(b["h"]), "l": float(b["l"]), "c": float(b["c"]), "v": float(b.get("v", 0))}
+                for b in data.get("bars") or []]
+        return bars  # includes older bars so the averages are warmed up; chart() trims for display
+
     async def clock(self) -> dict:
         return await self._request("GET", f"{self.settings.trading_url}/v2/clock")
 
@@ -219,6 +235,21 @@ class SimulatedMarket:
     async def closes(self, symbol: str, days: int = 10) -> list[float]:
         now = time.time()
         return [self._price(symbol, now - 86400 * (days - i)) for i in range(days)]
+
+    async def bars(self, symbol: str, range_: str) -> list[dict]:
+        _, step, _, keep = RANGES[range_]
+        now = time.time()
+        end = int(now) // step * step
+        rng = random.Random(f"{symbol}:{range_}:{end}")
+        out = []
+        for i in range(keep + 59, -1, -1):  # extra warm-up bars so the 50-bar average starts on screen
+            t0 = end - i * step
+            span = min(step, now - t0)  # the newest bar is still forming and closes at the live price
+            pts = [self._price(symbol, t0 + span * k / 4) for k in range(5)]
+            jitter = pts[-1] * 0.002 * rng.random()
+            out.append({"t": t0, "o": pts[0], "h": round(max(pts) + jitter, 2), "l": round(min(pts) - jitter, 2),
+                        "c": pts[-1], "v": float(rng.randint(2_000, 90_000))})
+        return out
 
     async def clock(self) -> dict:
         return {"is_open": True, "simulated": True}
@@ -471,6 +502,7 @@ class MarketDays:
         self._task: asyncio.Task | None = None
         self._locks: dict[str, asyncio.Lock] = {}  # one ledger writer per game: no double-spending races
         self._news: dict[str, tuple[float, list[dict]]] = {}
+        self._charts: dict[str, tuple[float, dict]] = {}
 
     @classmethod
     def from_env(cls, brain=None) -> "MarketDays":
@@ -529,8 +561,35 @@ class MarketDays:
         marks = {q["symbol"]: round((q["bid"] + q["ask"]) / 2, 2) for q in quotes}
         players = await self.store.players(game_id)
         game["quotes"] = quotes
+        histories = await asyncio.gather(
+            *(self.market.closes(symbol) for symbol in game["symbols"]), return_exceptions=True
+        )
+        game["history"] = {
+            symbol: [float(price) for price in history]
+            for symbol, history in zip(game["symbols"], histories)
+            if isinstance(history, list)
+        }
         game["leaderboard"] = ledger(players, await self.store.fills(game_id), game["start_cash"], marks)
         return game
+
+    async def chart(self, symbol: str, range_: str = "3M") -> dict:
+        """Candles plus indicators and a plain-English signal, cached briefly per symbol and range."""
+        symbol = symbol.strip().upper()
+        if not symbol.isalpha() or len(symbol) > 5:
+            raise MarketDaysInputError("unknown symbol")
+        if range_ not in RANGES:
+            raise MarketDaysInputError("range must be one of " + ", ".join(RANGES))
+        key = f"{symbol}:{range_}"
+        hit = self._charts.get(key)
+        if hit and time.monotonic() - hit[0] < CHART_TTL:
+            return hit[1]
+        bars = await self.market.bars(symbol, range_)
+        if not bars:
+            raise MarketDaysError(f"no price history for {symbol}")
+        result = {"symbol": symbol, "range": range_, "simulated": self.market.simulated,
+                  **ta.analyze(bars, RANGES[range_][3])}
+        self._charts[key] = (time.monotonic(), result)
+        return result
 
     # --- humans ---------------------------------------------------------------------------------------------
     def _lock(self, game_id: str) -> asyncio.Lock:
@@ -636,9 +695,16 @@ class MarketDays:
         mid = (q["bid"] + q["ask"]) / 2
         held = next((x["qty"] for x in me["positions"] if x["symbol"] == sym), 0)
         hist = (closes or [mid])[-10:] + [mid]
+        try:  # same chart read the humans see, so the desk and the players argue from the same evidence
+            tech = (await self.chart(sym, "3M"))["signal"]
+        except MarketDaysError:
+            tech = None
+        listing = "\n".join(f"- ${s}: a real US-listed stock" for s in game["symbols"])
+        if tech:
+            listing += f"\nChart read on ${sym} (daily technicals): {tech['label']}. " + " ".join(r["text"] for r in tech["reasons"])
         ctx = {
             "ticker": sym, "tickers": list(game["symbols"]), "company": sym, "price": mid,
-            "listing": "\n".join(f"- ${s}: a real US-listed stock" for s in game["symbols"]),
+            "listing": listing,
             "change_pct": (mid / hist[-2] - 1) * 100 if len(hist) > 1 and hist[-2] else 0.0,
             "anchor": sum(hist) / len(hist), "fair": 1.0, "ref_price": sum(hist) / len(hist),
             "bid": q["bid"], "ask": q["ask"], "closes": hist,
@@ -654,7 +720,7 @@ class MarketDays:
         qty = min(d.qty, MAX_ORDER_QTY, ctx["max_buy"] if d.action == "buy" else held)
         payload = {"trader": p["name"], "archetype": arch.key, "emoji": arch.emoji, "symbol": sym,
                    "action": d.action if qty > 0 else "hold", "qty": max(0, qty), "thought": d.thought,
-                   "model": d.model, "quote": q}
+                   "model": d.model, "quote": q, "chart": tech["label"] if tech else None}
         if d.action in ("buy", "sell") and qty > 0:
             try:
                 order = await self.market.paper_order(sym, d.action, qty)

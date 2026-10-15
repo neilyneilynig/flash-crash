@@ -242,6 +242,14 @@ async def days_game(game_id: str):
         _days_error(exc)
 
 
+@app.get("/api/days/chart/{symbol}")
+async def days_chart(symbol: str, range: str = "3M"):  # noqa: A002 (query parameter name)
+    try:
+        return await market_days.chart(symbol, range)
+    except MarketDaysError as exc:
+        _days_error(exc)
+
+
 @app.post("/api/days/games/{game_id}/join")
 async def days_join(game_id: str, body: DaysJoinIn):
     try:

@@ -58,6 +58,30 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .tut .dots { display: flex; gap: 6px; margin: 14px 0; }
 .tut .dots i { width: 8px; height: 8px; background: #244b37; }
 .tut .dots i.on { background: var(--g); }
+/* charts */
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.tab { background: none; color: #d8e7dc; border-color: #244b37; text-align: left; font-weight: normal; padding: 7px 10px; }
+.tab b { color: var(--g); margin-right: 6px; } .tab.on { border-color: var(--g); background: #10261a; }
+.seg button { background: none; color: var(--dim); border-color: #244b37; font-weight: normal; padding: 6px 9px; }
+.seg button.on { color: #07100c; background: var(--g); border-color: var(--g); font-weight: bold; }
+.chart-cols { display: grid; grid-template-columns: 1fr 300px; gap: 14px; margin-top: 10px; }
+@media (max-width: 860px) { .chart-cols { grid-template-columns: 1fr; } }
+.pane { position: relative; }
+.pane .lbl { position: absolute; left: 6px; top: 4px; z-index: 2; font-size: 11px; color: var(--dim); pointer-events: none; }
+#c-main { height: 340px; } #c-rsi, #c-macd { height: 96px; border-top: 1px solid var(--line); }
+.legend { font-size: 12px; color: var(--dim); margin-top: 6px; display: flex; gap: 12px; flex-wrap: wrap; }
+.legend i { display: inline-block; width: 12px; height: 3px; vertical-align: middle; margin-right: 4px; }
+.sig { border: 1px solid #244b37; padding: 14px; }
+.sig .label { font-size: 26px; font-weight: bold; letter-spacing: 1px; margin: 4px 0 10px; }
+.bull { color: var(--g); } .bear { color: var(--red); } .neutral { color: var(--amber); }
+.meter { height: 8px; background: linear-gradient(90deg, var(--red), #333 50%, var(--g)); position: relative; margin: 6px 0 4px; }
+.meter i { position: absolute; top: -4px; width: 3px; height: 16px; background: #fff; transform: translateX(-1px); }
+.reasons { list-style: none; padding: 0; margin: 12px 0 0; }
+.reasons li { padding: 6px 0 6px 16px; border-top: 1px solid var(--line); position: relative; line-height: 1.45; font-size: 13px; color: #d8e7dc; }
+.reasons li::before { content: "●"; position: absolute; left: 0; font-size: 10px; top: 9px; }
+.reasons li.bull::before { color: var(--g); } .reasons li.bear::before { color: var(--red); } .reasons li.neutral::before { color: var(--amber); }
+.badge { font-size: 11px; padding: 2px 6px; border: 1px solid currentColor; white-space: nowrap; }
+#quotes tr { cursor: pointer; } #quotes tr.sel td { background: #10261a; }
 </style>
 </head>
 <body>
@@ -92,11 +116,25 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
         <button class="qr" id="qr" title="Show big QR code" aria-label="Show big QR code"></button>
       </div>
     </div>
+    <div class="panel" id="charts">
+      <div class="row"><div class="tabs" id="tabs"></div>
+        <div class="seg row" id="ranges" style="margin-left:auto;gap:4px"></div></div>
+      <div class="row seg" id="inds" style="margin-top:8px;gap:4px"></div>
+      <div class="chart-cols">
+        <div>
+          <div class="pane"><span class="lbl" id="c-title"></span><div id="c-main"></div></div>
+          <div class="pane" id="p-rsi"><span class="lbl">RSI 14 · above 70 overbought · below 30 oversold</span><div id="c-rsi"></div></div>
+          <div class="pane" id="p-macd"><span class="lbl">MACD 12/26/9 · blue crossing above orange = momentum turning up</span><div id="c-macd"></div></div>
+          <div class="legend" id="legend"></div>
+        </div>
+        <div class="sig" id="sig"><span class="dim">Loading chart…</span></div>
+      </div>
+    </div>
     <div class="grid">
       <div>
         <div class="panel">
           <h2>Quotes</h2>
-          <table><thead><tr><th>Symbol</th><th class="num">Bid</th><th class="num">Ask</th><th class="num">Mid</th></tr></thead><tbody id="quotes"></tbody></table>
+          <table><thead><tr><th>Symbol</th><th class="num">Bid</th><th class="num">Ask</th><th class="num">Mid</th><th class="num">Signal</th></tr></thead><tbody id="quotes"></tbody></table>
         </div>
         <div class="panel">
           <h2>Leaderboard</h2>
@@ -175,14 +213,21 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
       state = await api("/api/days/games/" + id);
       game = state; location.hash = "game=" + id; status("");
       $("game").classList.remove("hidden");
+      sel = state.symbols.includes(sel) ? sel : state.symbols[0];
       paint();
       showQr(id);
+      $("t-sym").value = sel; controls(); loadChart(); loadSignals();
       connect();
-    } catch (e) { status(e.message); }
+    } catch (e) {
+      game = null; state = null; location.hash = "";
+      $("game").classList.add("hidden");
+      status(`This game is no longer available (${e.message}). Create or select a current game below.`);
+      await lobby();
+    }
   }
 
   // Join link: on localhost, phones can't reach "127.0.0.1", so ask the server for its LAN/public address.
-  let joinBase = null, qrLib = null;
+  let joinBase = null;
   async function joinUrl(id) {
     if (joinBase == null) {
       joinBase = location.origin + location.pathname;
@@ -192,13 +237,14 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
     }
     return joinBase + "#game=" + id;
   }
-  function loadQr() {
-    if (window.qrcode) return Promise.resolve();
-    return qrLib || (qrLib = new Promise((ok, fail) => {
-      const sc = document.createElement("script"); sc.src = base + "/static/vendor/qrcode.js";
+  const libs = {};
+  function lib(file) {  // vendor scripts come from the backend so the Vercel copy works too
+    return libs[file] || (libs[file] = new Promise((ok, fail) => {
+      const sc = document.createElement("script"); sc.src = base + "/static/vendor/" + file;
       sc.onload = ok; sc.onerror = fail; document.head.appendChild(sc);
     }));
   }
+  const loadQr = () => window.qrcode ? Promise.resolve() : lib("qrcode.js");
   async function showQr(id) {
     const url = await joinUrl(id);
     $("qr-url").textContent = $("qr-big-url").textContent = url.replace(/^https?:\/\//, "");
@@ -220,6 +266,10 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
         <p>The stocks are <b>${esc(state.symbols.join(", "))}</b>${real ? ", priced live from the real market." : ". Prices are simulated right now, but they move like the real thing."}</p>`],
       ["🛒", "Buy at the ask, sell at the bid", `<p>Pick a stock and a number of shares in <b>Your desk</b>, then hit <b class="up">Buy</b> or <b class="down">Sell</b>.</p>
         <p>You buy at the <b>ask</b> (a bit above the middle price) and sell at the <b>bid</b> (a bit below). That gap is the spread, so flipping in and out costs you.</p>`],
+      ["📈", "Read the chart", `<p>Pick a stock tab to see its candles. Green candle = price went up in that period, red = down.</p>
+        <p>The <b>signal card</b> reads five classic indicators (trend lines, RSI, MACD, Bollinger bands) and tells you in plain English whether they lean
+        <b class="up">BUY</b>, <b class="down">SELL</b> or <b class="neutral">HOLD</b>, and why. ▲ and ▼ on the chart mark where you and the AIs traded.</p>
+        <p class="dim">It's a hint, not a crystal ball. Indicators are often wrong!</p>`],
       ["🤖", "Beat the AI desk", `<p>Four AI fund managers trade the same stocks, each in character:</p><p>${desk}</p>
         <p>Read their reasoning in the <b>AI desk</b> feed, then fade them or follow them.</p>`],
       ["🏆", "Climb the leaderboard", `<p>Your score is <b>equity</b>: cash plus your shares at today's price. Your row is highlighted.</p>
@@ -246,6 +296,122 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
     $("qr-big").classList.add("hidden");
   });
 
+  // --- charts -----------------------------------------------------------------------------------------------
+  const RANGES = [["1D", "1 day"], ["5D", "5 days"], ["3M", "3 months"], ["1Y", "1 year"]];
+  const INDS = [["avg", "Averages"], ["bb", "Bollinger"], ["rsi", "RSI"], ["macd", "MACD"], ["marks", "Trades"]];
+  const on = JSON.parse(localStorage.getItem("md_inds") || '{"avg":1,"bb":0,"rsi":1,"macd":1,"marks":1}');
+  let sel = null, range = localStorage.getItem("md_range") || "3M", ch = null, cdata = null;
+  const sigs = {}, tz = -new Date().getTimezoneOffset() * 60;  // the chart library draws UTC; show local time
+  const T = t => t + tz;
+  const pts = arr => arr.map(p => ({ time: T(p.t), value: p.v }));
+
+  function buildCharts() {
+    const L = LightweightCharts, opt = h => ({ autoSize: true, layout: { background: { color: "#0b1811" }, textColor: "#8aa394", fontFamily: "ui-monospace, monospace" },
+      grid: { vertLines: { color: "#12261b" }, horzLines: { color: "#12261b" } }, rightPriceScale: { borderColor: "#244b37", minimumWidth: 70 },
+      timeScale: { borderColor: "#244b37", timeVisible: true, visible: h }, crosshair: { mode: 0 }, handleScroll: false, handleScale: false });
+    const main = L.createChart($("c-main"), opt(true)), rsiC = L.createChart($("c-rsi"), opt(false)), macdC = L.createChart($("c-macd"), opt(false));
+    const ln = (c, color, w, style) => c.addLineSeries({ color, lineWidth: w || 1, lineStyle: style || 0, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+    ch = { main, rsiC, macdC,
+      candles: main.addCandlestickSeries({ upColor: "#65ff9b", downColor: "#ff8f8f", wickUpColor: "#65ff9b", wickDownColor: "#ff8f8f", borderVisible: false }),
+      sma20: ln(main, "#ffd479", 2), sma50: ln(main, "#c77dff", 2), bbU: ln(main, "#5aa9ff", 1, 2), bbL: ln(main, "#5aa9ff", 1, 2),
+      rsi: ln(rsiC, "#c77dff", 2), rsiPad: ln(rsiC, "rgba(0,0,0,0)"),
+      hist: macdC.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false }), macd: ln(macdC, "#5aa9ff", 2), msig: ln(macdC, "#ffb020", 1), macdPad: ln(macdC, "rgba(0,0,0,0)") };
+    ch.rsi.createPriceLine({ price: 70, color: "#ff8f8f", lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
+    ch.rsi.createPriceLine({ price: 30, color: "#65ff9b", lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
+    // keep the three panes lined up
+    main.timeScale().subscribeVisibleLogicalRangeChange(r => { if (r) { rsiC.timeScale().setVisibleLogicalRange(r); macdC.timeScale().setVisibleLogicalRange(r); } });
+  }
+
+  function controls() {
+    if (!state) return;
+    $("ranges").innerHTML = RANGES.map(([k, l]) => `<button data-r="${k}" class="${k === range ? "on" : ""}" title="${l}">${k}</button>`).join("");
+    $("inds").innerHTML = '<span class="dim" style="margin-right:4px">show</span>' + INDS.map(([k, l]) => `<button data-i="${k}" class="${on[k] ? "on" : ""}">${l}</button>`).join("");
+    $("tabs").innerHTML = state.symbols.map(sym => { const q = state.quotes.find(x => x.symbol === sym), g = sigs[sym];
+      return `<button class="tab ${sym === sel ? "on" : ""}" data-s="${esc(sym)}"><b>${esc(sym)}</b>${q ? ((q.bid + q.ask) / 2).toFixed(2) : ""}
+        ${g ? `<span class="badge ${g.tone}" style="margin-left:6px">${esc(g.label)}</span>` : ""}</button>`; }).join("");
+  }
+  $("ranges").onclick = e => { const b = e.target.closest("button"); if (b) { range = b.dataset.r; localStorage.setItem("md_range", range); controls(); loadChart(); } };
+  $("inds").onclick = e => { const b = e.target.closest("button"); if (b) { on[b.dataset.i] = on[b.dataset.i] ? 0 : 1; localStorage.setItem("md_inds", JSON.stringify(on)); controls(); drawChart(); } };
+  $("tabs").onclick = e => { const b = e.target.closest("button"); if (b) pick(b.dataset.s); };
+  $("quotes").onclick = e => { const r = e.target.closest("tr[data-sym]"); if (r) pick(r.dataset.sym); };
+  function pick(sym) {
+    sel = sym; $("t-sym").value = sym; est(); controls(); loadChart();
+    document.querySelectorAll("#quotes tr").forEach(r => r.classList.toggle("sel", r.dataset.sym === sel));
+  }
+
+  async function loadChart() {
+    if (!sel) return;
+    const want = sel + range;
+    try {
+      await lib("lightweight-charts.js");
+      if (!ch) buildCharts();
+      const d = await api(`/api/days/chart/${encodeURIComponent(sel)}?range=${range}`);
+      if (sel + range !== want) return;  // clicked something else meanwhile
+      cdata = d; if (range === "3M") sigs[sel] = d.signal;
+      drawChart(true); controls();
+    } catch (e) { $("sig").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  }
+
+  function markers() {  // where you and the AI desk traded this stock
+    if (!on.marks || !cdata || !state || !cdata.bars.length) return [];
+    const bars = cdata.bars, first = bars[0].t, mine = localStorage.getItem(meKey(game.id));
+    const myName = (state.leaderboard.find(r => r.id === mine) || {}).name;
+    const snap = t => { let lo = 0, hi = bars.length - 1; if (t >= bars[hi].t) return bars[hi].t;
+      while (lo < hi) { const m = (lo + hi + 1) >> 1; if (bars[m].t <= t) lo = m; else hi = m - 1; } return bars[lo].t; };
+    const out = [];
+    for (const e of state.events) {
+      const p = e.payload || {}, side = e.kind === "human_trade" ? p.side : e.kind === "ai_decision" ? p.action : null;
+      if (!side || side === "hold" || p.symbol !== sel || !p.qty) continue;
+      const t = Date.parse(e.created_at) / 1000; if (t < first) continue;
+      const you = e.kind === "human_trade" && p.trader === myName, buy = side === "buy";
+      out.push({ time: T(snap(t)), position: buy ? "belowBar" : "aboveBar", shape: buy ? "arrowUp" : "arrowDown",
+        color: you ? "#ffffff" : buy ? "#65ff9b" : "#ff8f8f", text: (you ? "YOU " : e.kind === "ai_decision" ? (p.emoji || "🤖") + " " : "") + (buy ? "B" : "S") + p.qty });
+    }
+    return out.sort((a, b) => a.time - b.time);
+  }
+
+  function drawChart(fit) {
+    if (!ch || !cdata) return;
+    const d = cdata, times = d.bars.map(b => ({ time: T(b.t) }));
+    ch.candles.setData(d.bars.map(b => ({ time: T(b.t), open: b.o, high: b.h, low: b.l, close: b.c })));
+    ch.sma20.setData(on.avg ? pts(d.sma20) : []); ch.sma50.setData(on.avg ? pts(d.sma50) : []);
+    ch.bbU.setData(on.bb ? pts(d.bb_upper) : []); ch.bbL.setData(on.bb ? pts(d.bb_lower) : []);
+    ch.rsiPad.setData(times); ch.rsi.setData(pts(d.rsi));
+    ch.macdPad.setData(times); ch.macd.setData(pts(d.macd)); ch.msig.setData(pts(d.macd_signal));
+    ch.hist.setData(d.macd_hist.map(p => ({ time: T(p.t), value: p.v, color: p.v >= 0 ? "rgba(101,255,155,.5)" : "rgba(255,143,143,.5)" })));
+    $("p-rsi").classList.toggle("hidden", !on.rsi); $("p-macd").classList.toggle("hidden", !on.macd);
+    try { ch.candles.setMarkers(markers()); } catch (_) {}
+    if (fit) ch.main.timeScale().setVisibleLogicalRange({ from: -0.5, to: d.bars.length + 3 });  // room for the newest markers; panes follow
+    const last = d.bars[d.bars.length - 1].c, rangeName = (RANGES.find(r => r[0] === d.range) || [, d.range])[1];
+    $("c-title").innerHTML = `${esc(d.symbol)} · ${rangeName} · <span class="${d.change_pct >= 0 ? "up" : "down"}">${pct(d.change_pct)}</span>${d.simulated ? " · simulated" : ""}`;
+    $("legend").innerHTML = [on.avg && ["#ffd479", "20-bar average (short trend)"], on.avg && ["#c77dff", "50-bar average (big trend)"],
+      on.bb && ["#5aa9ff", "Bollinger bands (normal range)"], on.marks && ["#fff", "▲▼ trades (white = you)"]].filter(Boolean)
+      .map(([c, l]) => `<span><i style="background:${c}"></i>${l}</span>`).join("");
+    const g = d.signal, hint = g.tone === "bull" ? "Indicators lean bullish: buyers have the edge right now."
+      : g.tone === "bear" ? "Indicators lean bearish: sellers have the edge right now." : "Mixed signals: no clear edge either way.";
+    $("sig").innerHTML = `<div class="dim" style="font-size:12px;letter-spacing:2px">${esc(d.symbol)} SIGNAL · ${esc(d.range)}</div>
+      <div class="label ${g.tone}">${esc(g.label)}</div>
+      <div class="meter"><i style="left:${(g.score + 100) / 2}%"></i></div>
+      <div class="row dim" style="justify-content:space-between;font-size:11px"><span>sell</span><span>score ${g.score > 0 ? "+" : ""}${g.score}</span><span>buy</span></div>
+      <p style="margin:10px 0 0">${hint}</p>
+      <ul class="reasons">${g.reasons.map(r => `<li class="${r.tone}">${esc(r.text)}</li>`).join("")}</ul>
+      <div class="row" style="margin-top:12px"><button id="q-buy">Buy ${esc(d.symbol)}</button><button class="sell" id="q-sell">Sell ${esc(d.symbol)}</button></div>
+      <p class="dim" style="font-size:11px;margin:10px 0 0">Last ${last.toFixed(2)}. Uses the share count in Your desk. Signals are a teaching aid, not financial advice.</p>`;
+    $("q-buy").onclick = () => quick("buy"); $("q-sell").onclick = () => quick("sell");
+  }
+  function quick(side) {  // signal-card shortcuts go through the normal ticket
+    $("t-sym").value = sel; est();
+    if (!me()) { $("desk").scrollIntoView({ block: "center" }); $("me-name").focus(); status("Join the game first: enter your name below."); return; }
+    trade(side);
+  }
+  async function loadSignals() {  // badges on every tab and quote row
+    for (const sym of state.symbols) {
+      if (sigs[sym]) continue;
+      try { sigs[sym] = (await api(`/api/days/chart/${encodeURIComponent(sym)}?range=3M`)).signal; } catch (_) {}
+    }
+    controls(); paint();
+  }
+
   function me() { const id = localStorage.getItem(meKey(game.id)); return state.leaderboard.find(r => r.id === id); }
 
   function paint() {
@@ -253,9 +419,11 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
     $("title").textContent = s.name;
     $("meta").textContent = `${s.symbols.join(", ")} · started ${new Date(s.created_at).toLocaleString()} · ${money(s.start_cash)} each`;
     const sim = cfg.quotes !== "alpaca";
-    $("quotes").innerHTML = s.quotes.map(q => `<tr><td>${esc(q.symbol)}${sim ? ' <span class="dim">sim</span>' : ""}</td>
-      <td class="num">${q.bid.toFixed(2)}</td><td class="num">${q.ask.toFixed(2)}</td><td class="num">${((q.bid + q.ask) / 2).toFixed(2)}</td></tr>`).join("")
-      || '<tr><td colspan="4" class="dim">No quotes available right now.</td></tr>';
+    $("quotes").innerHTML = s.quotes.map(q => { const g = sigs[q.symbol];
+      return `<tr data-sym="${esc(q.symbol)}" class="${q.symbol === sel ? "sel" : ""}"><td>${esc(q.symbol)}${sim ? ' <span class="dim">sim</span>' : ""}</td>
+      <td class="num">${q.bid.toFixed(2)}</td><td class="num">${q.ask.toFixed(2)}</td><td class="num">${((q.bid + q.ask) / 2).toFixed(2)}</td>
+      <td class="num">${g ? `<span class="badge ${g.tone}">${esc(g.label)}</span>` : '<span class="dim">…</span>'}</td></tr>`; }).join("")
+      || '<tr><td colspan="5" class="dim">No quotes available right now.</td></tr>';
     const mine = localStorage.getItem(meKey(s.id));
     const deskEmoji = Object.fromEntries((cfg.ai_desk || []).map(d => [d.key, d.emoji]));
     $("board").innerHTML = s.leaderboard.map(r => `<tr class="${r.id === mine ? "me" : ""}"><td>${r.rank}</td>
@@ -285,7 +453,8 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
       const what = p.action === "hold" ? "HOLD" : `${p.action.toUpperCase()} ${p.qty} ${esc(p.symbol)} @ ${Number(p.price).toFixed(2)}`;
       const order = p.order_id ? `<br><span class="dim">${p.simulated ? "simulated order" : "Alpaca paper order"} ${esc(p.order_id)}</span>` : "";
       const err = p.error ? `<br><span class="err">${esc(p.error)}</span>` : "";
-      return `<div class="ev">${t}${esc(p.emoji || "🤖")} <b>${esc(p.trader)}</b> <span class="act ${cls}">${what}</span>${p.action === "hold" ? " " + esc(p.symbol) : ""}<br>${esc(p.thought)}${order}${err}</div>`;
+      const chart = p.chart ? ` <span class="dim">· chart said ${esc(p.chart)}</span>` : "";
+      return `<div class="ev">${t}${esc(p.emoji || "🤖")} <b>${esc(p.trader)}</b> <span class="act ${cls}">${what}</span>${p.action === "hold" ? " " + esc(p.symbol) : ""}${chart}<br>${esc(p.thought)}${order}${err}</div>`;
     }
     if (e.kind === "human_trade") return `<div class="ev">${t}🧑 <b>${esc(p.trader)}</b> <span class="act ${p.side === "buy" ? "up" : "down"}">${p.side.toUpperCase()} ${p.qty} ${esc(p.symbol)} @ ${Number(p.price).toFixed(2)}</span></div>`;
     if (e.kind === "player_joined") return `<div class="ev">${t}<span class="dim">${esc(p.player)} joined the game</span></div>`;
@@ -298,7 +467,8 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
     const q = (state && state.quotes || []).find(x => x.symbol === $("t-sym").value), n = +$("t-qty").value || 0;
     $("t-est").textContent = q && n ? `≈ ${money(n * q.ask)} to buy · ${money(n * q.bid)} to sell` : "";
   }
-  $("t-sym").onchange = $("t-qty").oninput = est;
+  $("t-qty").oninput = est;
+  $("t-sym").onchange = () => pick($("t-sym").value);
 
   async function trade(side) {
     try {
@@ -334,7 +504,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   $("share").onclick = async () => { const url = await joinUrl(game.id); navigator.clipboard && navigator.clipboard.writeText(url); $("share").textContent = "Copied"; setTimeout(() => $("share").textContent = "Copy link", 1500); };
 
   let pending = null;
-  async function refresh() { if (game) { state = await api("/api/days/games/" + game.id); paint(); } }
+  async function refresh() { if (game) { state = await api("/api/days/games/" + game.id); paint(); controls(); drawChart(false); } }
   function connect() {
     if (ws) return;
     ws = new WebSocket(base.replace(/^http/, "ws") + "/ws");
@@ -345,6 +515,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
     ws.onclose = () => { ws = null; setTimeout(connect, 2000); };
   }
   setInterval(() => { if (game && !document.hidden) refresh().catch(() => {}); }, 15000); // quotes move without events
+  setInterval(() => { if (game && !document.hidden) { for (const k in sigs) delete sigs[k]; loadChart(); loadSignals(); } }, 60000);
 
   (async () => {
     try { const r = await fetch("/api/config"); if (r.ok) base = ((await r.json()).apiBase || "").replace(/\/$/, ""); } catch (_) {}
