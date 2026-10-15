@@ -21,6 +21,10 @@ AI fund managers each start with $100,000 of virtual cash and compete on a leade
 * AI orders are capped at `MARKET_DAYS_MAX_ORDER_QTY` shares (default 25).
 * Creating games and running AI cycles place paper orders, so when Alpaca keys are set they require
   `MARKET_DAYS_ADMIN_TOKEN` (sent as the `X-Admin-Token` header; the page asks for it). Joining and human trades are open.
+* Joining returns a private player token (stored by the page, never shown on the leaderboard); trades must present it,
+  so nobody can trade as another player. Joining and trading are otherwise open, like the party game.
+* Each game's ledger has a single writer at a time, so simultaneous orders can't double-spend. This assumes one backend
+  instance per database (Railway's default); scaling out would need a database-level lock.
 * A database outage disables Market Days without taking the party game down.
 
 ## Railway backend
@@ -62,8 +66,8 @@ the backend CORS origin above. The party game endpoints and `/play` remain uncha
 | GET | `/api/days/games` | recent games |
 | POST | `/api/days/games` | create `{name, symbols}` (operator token with Alpaca keys) |
 | GET | `/api/days/games/{id}` | game, quotes, leaderboard with positions, last 100 events |
-| POST | `/api/days/games/{id}/join` | `{name}` returns your player id |
-| POST | `/api/days/games/{id}/trade` | `{player_id, symbol, side, qty}` filled at bid/ask |
+| POST | `/api/days/games/{id}/join` | `{name}` returns your player id and private `token` |
+| POST | `/api/days/games/{id}/trade` | `{player_id, token, symbol, side, qty}` filled at bid/ask |
 | POST | `/api/days/games/{id}/ai-cycle` | `{symbol?}` every AI manager decides and trades (operator token with Alpaca keys) |
 
 Live updates arrive on the shared `/ws` stream as `{"type": "market_days", "game_id", "event"}`.

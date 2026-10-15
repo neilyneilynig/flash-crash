@@ -203,7 +203,8 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 
   async function trade(side) {
     try {
-      await post(`/api/days/games/${game.id}/trade`, { player_id: localStorage.getItem(meKey(game.id)), symbol: $("t-sym").value, side, qty: +$("t-qty").value });
+      await post(`/api/days/games/${game.id}/trade`, { player_id: localStorage.getItem(meKey(game.id)), token: localStorage.getItem(meKey(game.id) + "_t") || "",
+        symbol: $("t-sym").value, side, qty: +$("t-qty").value });
       status(""); await refresh();
     } catch (e) { status(e.message); }
   }
@@ -213,7 +214,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   $("join").onclick = async () => {
     try {
       const p = await post(`/api/days/games/${game.id}/join`, { name: $("me-name").value || "Player" });
-      localStorage.setItem(meKey(game.id), p.id); status(""); await refresh();
+      localStorage.setItem(meKey(game.id), p.id); localStorage.setItem(meKey(game.id) + "_t", p.token); status(""); await refresh();
     } catch (e) { status(e.message); }
   };
   $("cycle").onclick = async () => {

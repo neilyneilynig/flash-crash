@@ -23,7 +23,7 @@ from pydantic import BaseModel  # noqa: E402
 
 from .brain import make_brain  # noqa: E402
 from .mcp_server import build_mcp  # noqa: E402
-from .market_days import MarketDays, MarketDaysError, MarketDaysInputError  # noqa: E402
+from .market_days import MarketDays, MarketDaysAuthError, MarketDaysError, MarketDaysInputError  # noqa: E402
 from .news import tavily_headlines  # noqa: E402
 from .sim import Simulation  # noqa: E402
 
@@ -186,12 +186,15 @@ class DaysJoinIn(BaseModel):
 
 class DaysTradeIn(BaseModel):
     player_id: str
+    token: str = ""  # returned once by /join; proves you own player_id
     symbol: str
     side: str
     qty: int
 
 
 def _days_error(exc: Exception):
+    if isinstance(exc, MarketDaysAuthError):
+        raise HTTPException(403, str(exc))
     if isinstance(exc, MarketDaysInputError):
         raise HTTPException(400, str(exc))
     raise HTTPException(503, str(exc) if isinstance(exc, MarketDaysError) else "Market Days request failed")
@@ -250,7 +253,7 @@ async def days_join(game_id: str, body: DaysJoinIn):
 @app.post("/api/days/games/{game_id}/trade")
 async def days_trade(game_id: str, body: DaysTradeIn):
     try:
-        return await market_days.trade(game_id, body.player_id, body.symbol, body.side, body.qty)
+        return await market_days.trade(game_id, body.player_id, body.symbol, body.side, body.qty, body.token)
     except MarketDaysError as exc:
         _days_error(exc)
 

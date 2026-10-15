@@ -17,6 +17,7 @@ import json
 import math
 import os
 import random
+import secrets
 import time
 import uuid
 from dataclasses import dataclass
@@ -40,6 +41,10 @@ class MarketDaysError(RuntimeError):
 
 class MarketDaysInputError(MarketDaysError):
     """The request itself was invalid (HTTP 400 rather than 503)."""
+
+
+class MarketDaysAuthError(MarketDaysInputError):
+    """The caller doesn't own this player (HTTP 403)."""
 
 
 SCHEMA = """
@@ -68,6 +73,7 @@ CREATE TABLE IF NOT EXISTS market_days_players (
     archetype TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE market_days_players ADD COLUMN IF NOT EXISTS secret_hash TEXT;
 CREATE TABLE IF NOT EXISTS market_days_fills (
     id BIGSERIAL PRIMARY KEY,
     game_id UUID NOT NULL REFERENCES market_days_games(id) ON DELETE CASCADE,
@@ -104,6 +110,10 @@ def _uuid(value: str) -> uuid.UUID:
         return uuid.UUID(str(value))
     except ValueError as exc:
         raise MarketDaysInputError("invalid id") from exc
+
+
+def _hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 def _now() -> str:
@@ -288,13 +298,19 @@ class MarketDaysStore:
             await conn.execute("UPDATE market_days_games SET updated_at = NOW() WHERE id = $1", _uuid(game_id))
         return _plain(row)
 
-    async def add_player(self, game_id: str, name: str, kind: str, archetype: str | None = None) -> dict:
+    async def add_player(self, game_id: str, name: str, kind: str, archetype: str | None = None,
+                         secret_hash: str | None = None) -> dict:
         async with self._pool().acquire() as conn:
             row = await conn.fetchrow(
-                "INSERT INTO market_days_players (id, game_id, name, kind, archetype) VALUES ($1, $2, $3, $4, $5) "
-                "RETURNING id, game_id, name, kind, archetype, created_at",
-                uuid.uuid4(), _uuid(game_id), name, kind, archetype)
+                "INSERT INTO market_days_players (id, game_id, name, kind, archetype, secret_hash) "
+                "VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, game_id, name, kind, archetype, created_at",
+                uuid.uuid4(), _uuid(game_id), name, kind, archetype, secret_hash)
         return _plain(row)
+
+    async def player_secret(self, game_id: str, player_id: str) -> str | None:
+        async with self._pool().acquire() as conn:
+            return await conn.fetchval("SELECT secret_hash FROM market_days_players WHERE game_id = $1 AND id = $2",
+                                       _uuid(game_id), _uuid(player_id))
 
     async def players(self, game_id: str) -> list[dict]:
         async with self._pool().acquire() as conn:
@@ -328,6 +344,7 @@ class MemoryStore:
         self._events: dict[str, list[dict]] = {}
         self._players: dict[str, list[dict]] = {}
         self._fills: dict[str, list[dict]] = {}
+        self._secrets: dict[str, str | None] = {}
         self._seq = 0
 
     async def connect(self) -> None:
@@ -368,12 +385,18 @@ class MemoryStore:
         game["updated_at"] = row["created_at"]
         return dict(row)
 
-    async def add_player(self, game_id: str, name: str, kind: str, archetype: str | None = None) -> dict:
+    async def add_player(self, game_id: str, name: str, kind: str, archetype: str | None = None,
+                         secret_hash: str | None = None) -> dict:
         game = self._get(game_id)
         row = {"id": str(uuid.uuid4()), "game_id": game["id"], "name": name, "kind": kind, "archetype": archetype,
                "created_at": _now()}
         self._players[game["id"]].append(row)
+        self._secrets[row["id"]] = secret_hash
         return dict(row)
+
+    async def player_secret(self, game_id: str, player_id: str) -> str | None:
+        self._get(game_id)
+        return self._secrets.get(str(player_id))
 
     async def players(self, game_id: str) -> list[dict]:
         return [dict(p) for p in self._players[self._get(game_id)["id"]]]
@@ -446,6 +469,7 @@ class MarketDays:
         self.rng = rng or random.Random()
         self.listeners: list = []  # async callbacks: (game_id, event)
         self._task: asyncio.Task | None = None
+        self._locks: dict[str, asyncio.Lock] = {}  # one ledger writer per game: no double-spending races
         self._news: dict[str, tuple[float, list[dict]]] = {}
 
     @classmethod
@@ -509,12 +533,18 @@ class MarketDays:
         return game
 
     # --- humans ---------------------------------------------------------------------------------------------
+    def _lock(self, game_id: str) -> asyncio.Lock:
+        return self._locks.setdefault(str(_uuid(game_id)), asyncio.Lock())
+
     async def join(self, game_id: str, name: str) -> dict:
+        """Returns the player plus a private token (shown once); trading as this player requires it."""
         name = " ".join(name.split())[:24]
         if not name:
             raise MarketDaysInputError("enter a name")
         await self.store.game(game_id)
-        player = await self.store.add_player(game_id, name, "human")
+        token = secrets.token_urlsafe(24)
+        player = await self.store.add_player(game_id, name, "human", secret_hash=_hash(token))
+        player["token"] = token
         await self.store.event(game_id, "player_joined", {"player": name})
         await self._emit(game_id, {"kind": "player_joined", "player": name})
         return player
@@ -526,8 +556,15 @@ class MarketDays:
         rows = ledger(players, await self.store.fills(game_id), game["start_cash"], {})
         return next(r for r in rows if r["id"] == str(player_id))
 
-    async def trade(self, game_id: str, player_id: str, symbol: str, side: str, qty: int) -> dict:
+    async def trade(self, game_id: str, player_id: str, symbol: str, side: str, qty: int, token: str = "") -> dict:
         """A human trade: filled virtually at the real ask (buy) or bid (sell). No Alpaca order."""
+        want = await self.store.player_secret(game_id, player_id)
+        if not want or not secrets.compare_digest(_hash(token or ""), want):
+            raise MarketDaysAuthError("not your player: rejoin this game on this device")
+        async with self._lock(game_id):  # check cash/shares and record the fill atomically
+            return await self._trade(game_id, player_id, symbol, side, qty)
+
+    async def _trade(self, game_id: str, player_id: str, symbol: str, side: str, qty: int) -> dict:
         game = await self.store.game(game_id)
         symbol = symbol.upper()
         if symbol not in game["symbols"]:
@@ -565,6 +602,10 @@ class MarketDays:
 
     async def ai_cycle(self, game_id: str, symbol: str | None = None) -> list[dict]:
         """Every AI manager looks at a stock, decides with its persona brain, and trades on the paper account."""
+        async with self._lock(game_id):  # overlapping cycles (button + autopilot) would double-spend AI cash
+            return await self._ai_cycle(game_id, symbol)
+
+    async def _ai_cycle(self, game_id: str, symbol: str | None = None) -> list[dict]:
         if self.brain is None:
             raise MarketDaysError("no AI brain configured")
         game = await self.store.game(game_id)

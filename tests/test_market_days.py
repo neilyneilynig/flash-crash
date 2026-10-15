@@ -39,7 +39,7 @@ import os
 import random
 
 from flashcrash.brain import Decision, MockBrain
-from flashcrash.market_days import (AlpacaSettings, MarketDays, MarketDaysInputError, MarketDaysStore, MemoryStore,
+from flashcrash.market_days import (AlpacaSettings, MarketDaysAuthError, MarketDays, MarketDaysInputError, MarketDaysStore, MemoryStore,
                                     SimulatedMarket, ledger)
 
 
@@ -62,11 +62,11 @@ def test_game_has_an_ai_desk_and_humans_trade_at_real_quotes(days):
             g = await days.create_game("Friday", ["spy", "NVDA", "spy", "bad!"])
             me = await days.join(g["id"], "Neil")
             q = await days.market.quote("NVDA")
-            fill = await days.trade(g["id"], me["id"], "nvda", "buy", 10)
+            fill = await days.trade(g["id"], me["id"], "nvda", "buy", 10, me["token"])
             with pytest.raises(MarketDaysInputError):
-                await days.trade(g["id"], me["id"], "NVDA", "sell", 11)  # can't sell what you don't own
+                await days.trade(g["id"], me["id"], "NVDA", "sell", 11, me["token"])  # can't sell what you don't own
             with pytest.raises(MarketDaysInputError):
-                await days.trade(g["id"], me["id"], "TSLA", "buy", 1)  # not in this game
+                await days.trade(g["id"], me["id"], "TSLA", "buy", 1, me["token"])  # not in this game
             return g, me, q, fill, await days.state(g["id"])
         finally:
             await days.stop()
@@ -155,3 +155,41 @@ def test_vercel_page_matches_backend_page():
     root = Path(__file__).resolve().parents[1]
     assert (root / "market-days/index.html").read_text() == (root / "flashcrash/static/market_days.html").read_text(), \
         "copy flashcrash/static/market_days.html to market-days/index.html"
+
+
+def test_players_cannot_trade_as_someone_else(days):
+    async def run():
+        await days.start()
+        try:
+            g = await days.create_game("Auth", ["SPY"])
+            alice, bob = await days.join(g["id"], "Alice"), await days.join(g["id"], "Bob")
+            assert "token" not in str(await days.state(g["id"]))  # tokens are never published
+            with pytest.raises(MarketDaysAuthError):
+                await days.trade(g["id"], alice["id"], "SPY", "buy", 1, bob["token"])
+            with pytest.raises(MarketDaysAuthError):
+                await days.trade(g["id"], alice["id"], "SPY", "buy", 1)
+            return await days.trade(g["id"], alice["id"], "SPY", "buy", 1, alice["token"])
+        finally:
+            await days.stop()
+
+    assert asyncio.run(run())["qty"] == 1
+
+
+def test_simultaneous_buys_cannot_overspend(days):
+    async def run():
+        await days.start()
+        try:
+            g = await days.create_game("Race", ["SPY"])
+            me = await days.join(g["id"], "Racer")
+            q = await days.market.quote("SPY")
+            n = int(60_000 // q["ask"])  # each order alone is affordable, two together are not
+            results = await asyncio.gather(*(days.trade(g["id"], me["id"], "SPY", "buy", n, me["token"]) for _ in range(5)),
+                                           return_exceptions=True)
+            return results, await days.state(g["id"])
+        finally:
+            await days.stop()
+
+    results, state = asyncio.run(run())
+    assert sum(isinstance(r, dict) for r in results) == 1
+    racer = next(r for r in state["leaderboard"] if r["name"] == "Racer")
+    assert racer["cash"] >= 0
