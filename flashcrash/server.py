@@ -200,10 +200,13 @@ def _days_error(exc: Exception):
     raise HTTPException(503, str(exc) if isinstance(exc, MarketDaysError) else "Market Days request failed")
 
 
-def _days_operator(token: str | None) -> None:
+def _days_operator(token: str | None, destructive: bool = False) -> None:
     """Creating games and running AI cycles place orders on the Alpaca paper account, so on a public deployment they
-    need MARKET_DAYS_ADMIN_TOKEN (sent as X-Admin-Token). Without Alpaca keys (simulated quotes) they stay open."""
+    need MARKET_DAYS_ADMIN_TOKEN (sent as X-Admin-Token). Without Alpaca keys (simulated quotes) they stay open.
+    Destructive actions (restarting a game wipes everyone's trades) always need the token."""
     want = os.getenv("MARKET_DAYS_ADMIN_TOKEN", "")
+    if destructive and not want:
+        raise HTTPException(403, "set MARKET_DAYS_ADMIN_TOKEN to allow restarting games")
     if want:
         if not secrets.compare_digest(token or "", want):
             raise HTTPException(401, "operator token required (X-Admin-Token)")
@@ -271,9 +274,32 @@ async def days_trade(game_id: str, body: DaysTradeIn):
         _days_error(exc)
 
 
+class DaysAskIn(BaseModel):
+    symbol: str
+    question: str
+    player_id: str | None = None
+
+
+@app.get("/api/days/news/{symbol}")
+async def days_news(symbol: str):
+    try:
+        return await market_days.news(symbol)
+    except MarketDaysError as exc:
+        _days_error(exc)
+
+
+@app.post("/api/days/games/{game_id}/ask")
+async def days_ask(game_id: str, body: DaysAskIn):
+    try:
+        players = {p["id"]: p["name"] for p in await market_days.store.players(game_id)}
+        return await market_days.ask(game_id, body.symbol, body.question, players.get(body.player_id or "", ""))
+    except MarketDaysError as exc:
+        _days_error(exc)
+
+
 @app.post("/api/days/games/{game_id}/restart")
 async def days_restart(game_id: str, x_admin_token: str | None = Header(None)):
-    _days_operator(x_admin_token)
+    _days_operator(x_admin_token, destructive=True)
     try:
         return await market_days.restart(game_id)
     except MarketDaysError as exc:

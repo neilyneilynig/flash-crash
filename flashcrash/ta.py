@@ -199,7 +199,8 @@ class _Ind:
                 pts, text = -20, "Price is at the top Bollinger band: it's unusually expensive versus its recent range."
             else:
                 pts, text = 0, f"Price is inside its Bollinger bands ({pos:.0f}% of the way from bottom to top): a normal range."
-            tile("bb", "Bollinger", f"{pos:.0f}% of band", pts, text,
+            where = "below the band" if pos < 0 else "above the band" if pos > 100 else f"{pos:.0f}% of band"
+            tile("bb", "Bollinger", where, pts, text,
                  "Bands two standard deviations around the 20-bar average. About 95% of prices land inside, so "
                  "touching an edge is unusual.")
         k, d = self.k[i], self.d[i]

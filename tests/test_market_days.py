@@ -327,3 +327,51 @@ def test_restart_resets_everyone_but_keeps_players(days):
     assert all(r["equity"] == 100_000 and not r["positions"] for r in s["leaderboard"])
     assert len(s["leaderboard"]) == 5
     assert [e["kind"] for e in s["events"]] == ["game_restarted"]
+
+
+def test_ask_the_desk_answers_in_character_and_logs_it(days):
+    async def run():
+        await days.start()
+        g = await days.create_game("Ask", ["SPY"])
+        ev = await days.ask(g["id"], "SPY", "Should I buy SPY?", "Neil")
+        with pytest.raises(MarketDaysError, match="still answering"):
+            await days.ask(g["id"], "SPY", "And now?")
+        with pytest.raises(MarketDaysError):
+            await days.ask(g["id"], "TSLA", "Not in this game")
+        return ev, await days.state(g["id"])
+
+    ev, state = asyncio.run(run())
+    answers = ev["payload"]["answers"]
+    assert len(answers) == 4 and all(a["text"] and a["lean"] in ("buy", "sell", "wait") for a in answers)
+    assert {a["trader"] for a in answers} == {"Chad the Degen", "Warren Jr.", "Q-Bot 9000", "Moby Capital"}
+    assert state["events"][-1]["kind"] == "desk_answer" and state["events"][-1]["payload"]["asker"] == "Neil"
+
+
+def test_lean_reads_the_first_call():
+    from flashcrash.market_days import _lean
+    assert _lean("Wait. Price is below its average: the short-term trend is down.") == "wait"
+    assert _lean("BUY. Free money 🚀") == "buy"
+    assert _lean("We'd sell into strength.") == "sell"
+    assert _lean("Interesting times.") == "wait"
+
+
+def test_simulated_market_has_no_fake_news():
+    md = MarketDays()
+    n = asyncio.run(md.news("NVDA"))
+    assert n["items"] == [] and n["available"] is False
+
+
+def test_alpaca_news_parsing():
+    def handler(request):
+        assert request.url.path == "/v1beta1/news" and request.url.params["symbols"] == "NVDA"
+        return httpx.Response(200, json={"news": [{"headline": "Nvidia beats record", "summary": "", "source": "x",
+                                                     "url": "u", "created_at": "t"}, {"headline": ""}]})
+
+    async def run():
+        a = AlpacaPaper(AlpacaSettings("k", "s", "https://trade", "https://data"),
+                        httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+        md = MarketDays(alpaca=a)
+        return await md.news("nvda")
+
+    n = asyncio.run(run())
+    assert [i["headline"] for i in n["items"]] == ["Nvidia beats record"] and n["items"][0]["sentiment"] > 0

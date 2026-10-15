@@ -17,6 +17,7 @@ import json
 import math
 import os
 import random
+import re
 import secrets
 import time
 import uuid
@@ -28,6 +29,7 @@ import asyncpg
 import httpx
 
 from . import ta
+from .brain import sentiment
 from .personas import BY_KEY, Agent
 
 START_CASH = 100_000.0
@@ -38,6 +40,7 @@ DESK_NAMES = {"wsb": "Chad the Degen", "value": "Warren Jr.", "quant": "Q-Bot 90
 RANGES = {"1D": ("5Min", 300, 4, 78), "5D": ("30Min", 1800, 9, 65), "3M": ("1Day", 86400, 140, 63),
           "1Y": ("1Day", 86400, 420, 252)}
 WIDE_SPREAD = 0.01  # quotes wider than 1% of the price are treated as unusable (typical after hours)
+ASK_COOLDOWN = float(os.getenv("MARKET_DAYS_ASK_COOLDOWN", "8"))  # seconds between questions per game (LLM cost)
 CHART_TTL = 30.0  # seconds; keeps Alpaca well under its rate limit however many phones are watching
 
 
@@ -214,6 +217,12 @@ class AlpacaPaper:
     async def clock(self) -> dict:
         return await self._request("GET", f"{self.settings.trading_url}/v2/clock")
 
+    async def news(self, symbol: str, limit: int = 8) -> list[dict]:
+        data = await self._request("GET", f"{self.settings.data_url}/v1beta1/news",
+                                   params={"symbols": symbol, "limit": limit, "sort": "desc"})
+        return [{"headline": n.get("headline", ""), "summary": n.get("summary", ""), "source": n.get("source", ""),
+                 "url": n.get("url", ""), "at": n.get("created_at")} for n in data.get("news") or [] if n.get("headline")]
+
     async def paper_order(self, symbol: str, side: str, qty: int = 1) -> dict:
         if side not in ("buy", "sell") or qty < 1:
             raise MarketDaysError("invalid paper order")
@@ -265,6 +274,9 @@ class SimulatedMarket:
 
     async def clock(self) -> dict:
         return {"is_open": True, "simulated": True}
+
+    async def news(self, symbol: str, limit: int = 8) -> list[dict]:
+        return []  # no fake news about real companies
 
     async def paper_order(self, symbol: str, side: str, qty: int = 1) -> dict:
         if side not in ("buy", "sell") or qty < 1:
@@ -507,6 +519,42 @@ def ledger(players: list[dict], fills: list[dict], start_cash: float, marks: dic
     return rows
 
 
+# ----------------------------------------------------------------------------------------------- desk voices
+
+_LEAN = re.compile(r"\b(buy|buying|long|load|add|adding|sell|selling|short|dump|trim|exit|avoid|wait|hold|holding)\b(?!-)", re.I)
+_LEAN_SIDE = {"buy": "buy", "buying": "buy", "long": "buy", "load": "buy", "add": "buy", "adding": "buy",
+              "sell": "sell", "selling": "sell", "short": "sell", "dump": "sell", "trim": "sell", "exit": "sell",
+              "avoid": "sell"}
+
+
+def _lean(text: str) -> str:
+    """The first explicit call in the answer wins ("Wait. ...short-term trend..." is a wait, not a sell)."""
+    m = _LEAN.search(text)
+    return _LEAN_SIDE.get(m.group(1).lower(), "wait") if m else "wait"
+
+
+def _desk_fallback(arch: str, sym: str, price: float | None, sig: dict | None, held: int) -> str:
+    """In-character answers when no LLM is configured (or it fails), built from the same chart read."""
+    label, score = (sig["label"], sig["score"]) if sig else ("HOLD", 0)
+    px = f"${price:,.2f}" if price else "this price"
+    reason = sig["reasons"][0]["text"] if sig and sig["reasons"] else "The tape is quiet."
+    bull = score >= 15
+    bear = score <= -15
+    if arch == "wsb":
+        return (f"BUY. ${sym} at {px} is free money and I'm adding to my {held} shares 🚀" if bull or held else
+                f"Chart says {label}, I say buy the dip on ${sym}. Diamond hands 💎🙌" if bear else
+                f"Boring chart. I'd buy ${sym} anyway, fortune favours the bold 🚀")
+    if arch == "value":
+        return (f"Wait. ${sym} has already run; I don't chase. {reason}" if bull else
+                f"Buy slowly. When others are fearful about ${sym}, I get interested. {reason}" if bear else
+                f"Wait for a better price on ${sym}. Patience is a position.")
+    if arch == "quant":
+        return f"Signal score {score:+d} on ${sym}: {label}. {'Buy' if bull else 'Sell' if bear else 'Wait'}. {reason}"
+    return (f"We're accumulating ${sym} quietly. Retail will chase above {px}. Buy." if bull else
+            f"We'd sell ${sym} into any strength. {reason}" if bear else
+            f"Wait. We let retail show their hand on ${sym} first.")
+
+
 # ----------------------------------------------------------------------------------------------- the service
 
 class MarketDays:
@@ -526,6 +574,7 @@ class MarketDays:
         self._locks: dict[str, asyncio.Lock] = {}  # one ledger writer per game: no double-spending races
         self._news: dict[str, tuple[float, list[dict]]] = {}
         self._charts: dict[str, tuple[float, dict]] = {}
+        self._asked: dict[str, float] = {}
 
     @classmethod
     def from_env(cls, brain=None) -> "MarketDays":
@@ -628,6 +677,71 @@ class MarketDays:
         self._charts["clock"] = (time.monotonic(), result)
         return result
 
+    async def news(self, symbol: str) -> dict:
+        """Latest real headlines for a symbol, each tagged with a quick good/bad-news read. Cached five minutes."""
+        symbol = symbol.strip().upper()
+        if not symbol.isalpha() or len(symbol) > 5:
+            raise MarketDaysInputError("unknown symbol")
+        hit = self._charts.get("news:" + symbol)
+        if hit and time.monotonic() - hit[0] < 300:
+            return hit[1]
+        try:
+            items = await self.market.news(symbol)
+        except MarketDaysError:
+            items = []
+        for n in items:
+            n["sentiment"] = sentiment(n["headline"] + " " + n.get("summary", ""))
+        mood = sum(n["sentiment"] for n in items) / len(items) if items else 0.0
+        result = {"symbol": symbol, "items": items, "mood": round(mood, 2), "available": not self.market.simulated}
+        self._charts["news:" + symbol] = (time.monotonic(), result)
+        return result
+
+    # --- ask the desk --------------------------------------------------------------------------------------------
+    async def ask(self, game_id: str, symbol: str, question: str, asker: str = "") -> dict:
+        """Every AI manager answers a player's question about a stock, in character, from the same evidence."""
+        game = await self.store.game(game_id)
+        symbol = (symbol or "").strip().upper()
+        if symbol not in game["symbols"]:
+            raise MarketDaysInputError("symbol is not in this game")
+        question = " ".join((question or "").split())[:200]
+        if len(question) < 3:
+            raise MarketDaysInputError("ask a question first")
+        last = self._asked.get(game["id"], 0.0)
+        if time.monotonic() - last < ASK_COOLDOWN:
+            raise MarketDaysInputError("the desk is still answering the last question; try again in a few seconds")
+        self._asked[game["id"]] = time.monotonic()
+        q = (await self._quotes([symbol]) or [None])[0]
+        price = (q["bid"] + q["ask"]) / 2 if q else None
+        try:
+            sig = (await self.chart(symbol, "3M"))["signal"]
+        except MarketDaysError:
+            sig = None
+        heads = [h["text"] for h in await self._headlines(symbol)]
+        players = await self.store.players(game_id)
+        book = {r["id"]: r for r in ledger(players, await self.store.fills(game_id), game["start_cash"],
+                                            {symbol: price} if price else {})}
+        evidence = (f"${symbol} trades at {price:.2f}. " if price else "") + \
+            (f"The chart signal says {sig['label']} (score {sig['score']}): " + " ".join(r["text"] for r in sig["reasons"][:4]) if sig else "") + \
+            ("\nLatest headlines: " + " | ".join(heads) if heads else "\nNo fresh headlines.")
+
+        async def answer(p: dict) -> dict:
+            arch = BY_KEY.get(p.get("archetype") or "quant", BY_KEY["quant"])
+            held = next((x["qty"] for x in book.get(p["id"], {}).get("positions", []) if x["symbol"] == symbol), 0)
+            system = (f"You are {p['name']}, an AI fund manager in a stock-trading party game. {arch.description} "
+                      "Answer the player's question in character in at most two short sentences: give a clear lean "
+                      "(buy, sell or wait) and one concrete reason from the evidence. Stay in character, be fun, "
+                      "no disclaimers, no markdown.")
+            user = f"{evidence}\nYou currently hold {held} shares of ${symbol}.\nPlayer's question: {question}"
+            text = await self.brain.narrate(system, user, _desk_fallback(arch.key, symbol, price, sig, held), 110) \
+                if self.brain else _desk_fallback(arch.key, symbol, price, sig, held)
+            return {"trader": p["name"], "archetype": arch.key, "emoji": arch.emoji, "text": text, "lean": _lean(text)}
+
+        answers = await asyncio.gather(*(answer(p) for p in players if p["kind"] == "ai"))
+        ev = await self.store.event(game_id, "desk_answer", {"asker": asker[:40], "symbol": symbol, "question": question,
+                                                             "answers": list(answers)})
+        await self._emit(game_id, ev)
+        return ev
+
     # --- humans ---------------------------------------------------------------------------------------------
     def _lock(self, game_id: str) -> asyncio.Lock:
         return self._locks.setdefault(str(_uuid(game_id)), asyncio.Lock())
@@ -692,6 +806,12 @@ class MarketDays:
 
     # --- the AI desk ------------------------------------------------------------------------------------------
     async def _headlines(self, symbol: str) -> list[dict]:
+        try:
+            items = (await self.news(symbol))["items"]
+        except MarketDaysError:
+            items = []
+        if items:
+            return [{"text": n["headline"], "age": 0} for n in items[:3]]
         if not os.getenv("TAVILY_API_KEY"):
             return []
         at, items = self._news.get(symbol, (0.0, []))
