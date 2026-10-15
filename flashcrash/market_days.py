@@ -599,8 +599,22 @@ class MarketDays:
         if not bars:
             raise MarketDaysError(f"no price history for {symbol}")
         result = {"symbol": symbol, "range": range_, "simulated": self.market.simulated,
-                  **ta.analyze(bars, RANGES[range_][3])}
+                  **ta.analyze(bars, RANGES[range_][3], intraday=RANGES[range_][1] < 86400)}
         self._charts[key] = (time.monotonic(), result)
+        return result
+
+    async def clock(self) -> dict:
+        """Is the real market open, and when does that change? Cached a minute."""
+        hit = self._charts.get("clock")
+        if hit and time.monotonic() - hit[0] < 60:
+            return hit[1]
+        try:
+            c = await self.market.clock()
+        except MarketDaysError:
+            c = {"is_open": None}
+        result = {"is_open": c.get("is_open"), "next_open": c.get("next_open"), "next_close": c.get("next_close"),
+                  "simulated": self.market.simulated}
+        self._charts["clock"] = (time.monotonic(), result)
         return result
 
     # --- humans ---------------------------------------------------------------------------------------------

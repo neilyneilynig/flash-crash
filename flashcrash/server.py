@@ -242,6 +242,11 @@ async def days_game(game_id: str):
         _days_error(exc)
 
 
+@app.get("/api/days/clock")
+async def days_clock():
+    return await market_days.clock()
+
+
 @app.get("/api/days/chart/{symbol}")
 async def days_chart(symbol: str, range: str = "3M"):  # noqa: A002 (query parameter name)
     try:

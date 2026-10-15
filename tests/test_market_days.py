@@ -280,3 +280,33 @@ def test_wide_after_hours_quote_falls_back_to_last_trade():
 
     q = asyncio.run(run())
     assert q["last_trade"] and q["bid"] < 221.5 < q["ask"] and q["ask"] - q["bid"] < 0.2
+
+
+def test_new_indicators_tiles_and_backtest():
+    import math as m
+    closes = [100 + 10 * m.sin(i / 6) + i * 0.1 for i in range(140)]
+    bars = [{"t": 1_700_000_000 + i * 300, "o": c - 0.2, "h": c + 1, "l": c - 1, "c": c, "v": 1000.0 + (i % 7) * 100}
+            for i, c in enumerate(closes)]
+    a = ta.analyze(bars, 78, intraday=True)
+    assert len(a["bars"]) == 78 and len(a["vwap"]) == 78 and len(a["stoch_k"]) == 78
+    assert all(0 <= p["v"] <= 100 for p in a["stoch_k"])
+    assert a["levels"]["support"] < a["levels"]["resistance"]
+    keys = {t["key"] for t in a["signal"]["tiles"]}
+    assert {"trend", "bigtrend", "rsi", "macd", "bb", "stoch", "volume", "atr"} <= keys
+    assert all(t["explain"] and t["text"] for t in a["signal"]["tiles"])
+    bt = a["backtest"]
+    assert bt["hold_pct"] == round((closes[-1] / closes[-78] - 1) * 100, 2)
+    assert bt["trades"] == len(bt["flips"]) and all(f["side"] in ("buy", "sell") for f in bt["flips"])
+    assert ta.analyze(bars, 78)["vwap"] == []  # daily charts skip VWAP
+
+
+def test_backtest_in_a_steady_rally_stays_long():
+    bars = _bars([100 * 1.004 ** i for i in range(120)])
+    bt = ta.analyze(bars, 60)["backtest"]
+    assert bt["in_market"] and bt["strategy_pct"] > 0
+
+
+def test_clock_is_cached_and_flags_simulation():
+    md = MarketDays()
+    c = asyncio.run(md.clock())
+    assert c["is_open"] is True and c["simulated"] is True
